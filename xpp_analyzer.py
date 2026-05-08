@@ -69,6 +69,18 @@ class MethodSource:
     external_calls: list[str] = field(default_factory=list)
 
 
+def normalize_xpo_source(text: str) -> str:
+    """Remove leading XPO export markers from source lines."""
+    lines = []
+    for line in text.splitlines():
+        stripped = line.lstrip()
+        if stripped.startswith("#"):
+            lines.append(stripped[1:])
+        else:
+            lines.append(line)
+    return "\n".join(lines)
+
+
 def mask_comments_and_strings(source: str) -> str:
     """Replace comments and strings with spaces while preserving offsets/newlines."""
     result: list[str] = []
@@ -278,7 +290,8 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = parse_args()
-    source = args.input.read_text(encoding="utf-8")
+    source = args.input.read_text(encoding="utf-8", errors="ignore")
+    source = normalize_xpo_source(source)
     result = analyze_source(source, include_source=not args.no_source)
     args.output.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
 

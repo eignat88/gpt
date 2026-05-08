@@ -1,6 +1,6 @@
 import unittest
 
-from xpp_analyzer import analyze_source
+from xpp_analyzer import analyze_source, normalize_xpo_source
 
 
 SAMPLE = """
@@ -41,6 +41,22 @@ class AnalyzerTest(unittest.TestCase):
         self.assertEqual(result["call_graph"], {"run": ["helper"], "helper": []})
         self.assertEqual(result["call_tree"][0]["method"], "run")
         self.assertEqual(result["call_tree"][0]["calls"][0]["method"], "helper")
+
+    def test_normalizes_xpo_method_markers_before_analysis(self):
+        xpo_source = """
+class Demo
+{
+    #public void run()
+    #{
+    #}
+}
+"""
+
+        result = analyze_source(normalize_xpo_source(xpo_source))
+
+        self.assertEqual(result["summary"]["method_count"], 1)
+        self.assertEqual(result["methods"][0]["name"], "run")
+
 
 
 if __name__ == "__main__":
