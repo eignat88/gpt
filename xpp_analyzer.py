@@ -10,7 +10,7 @@ from __future__ import annotations
 import argparse
 import json
 import re
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -58,6 +58,22 @@ class Operation:
 
 
 @dataclass
+class MethodParameter:
+    name: str
+    type: str | None
+    default: str | None
+
+
+@dataclass
+class MethodSignature:
+    access: str | None
+    static: bool
+    return_type: str | None
+    name: str
+    parameters: list[MethodParameter]
+
+
+@dataclass
 class MethodSource:
     name: str
     start: int
@@ -66,6 +82,7 @@ class MethodSource:
     end_line: int
     source: str
     clean_source: str
+    signature: MethodSignature | None = None
     operations: list[Operation] = field(default_factory=list)
     calls: list[str] = field(default_factory=list)
     internal_calls: list[str] = field(default_factory=list)
@@ -221,6 +238,104 @@ def section_end_offset(source: str, endsource_end: int) -> int:
     return endsource_end
 
 
+
+METHOD_SIGNATURE_RE = re.compile(
+    r"(?ims)^\s*(?!(?:if|while|for|switch|catch|using|else)\b)"
+    r"(?P<prefix>[^;{}=]*?\b(?P<name>[A-Za-z_]\w*))\s*"
+    r"\((?P<parameters>[^;{}]*)\)\s*\{"
+)
+ACCESS_MODIFIERS = {"public", "private", "protected"}
+SIGNATURE_MODIFIERS = ACCESS_MODIFIERS | {"static"}
+
+
+def split_parameters(parameters: str) -> list[str]:
+    """Split parameter text by commas while preserving simple quoted defaults."""
+    result: list[str] = []
+    start = 0
+    quote: str | None = None
+    depth = 0
+    index = 0
+    while index < len(parameters):
+        char = parameters[index]
+        if quote:
+            if char == "\\" and index + 1 < len(parameters):
+                index += 2
+                continue
+            if char == quote:
+                quote = None
+        elif char in {'"', "'"}:
+            quote = char
+        elif char in "([":
+            depth += 1
+        elif char in ")]" and depth > 0:
+            depth -= 1
+        elif char == "," and depth == 0:
+            result.append(parameters[start:index].strip())
+            start = index + 1
+        index += 1
+
+    tail = parameters[start:].strip()
+    if tail:
+        result.append(tail)
+    return result
+
+
+def split_default(parameter: str) -> tuple[str, str | None]:
+    quote: str | None = None
+    depth = 0
+    index = 0
+    while index < len(parameter):
+        char = parameter[index]
+        if quote:
+            if char == "\\" and index + 1 < len(parameter):
+                index += 2
+                continue
+            if char == quote:
+                quote = None
+        elif char in {'"', "'"}:
+            quote = char
+        elif char in "([":
+            depth += 1
+        elif char in ")]" and depth > 0:
+            depth -= 1
+        elif char == "=" and depth == 0:
+            return parameter[:index].strip(), parameter[index + 1 :].strip() or None
+        index += 1
+    return parameter.strip(), None
+
+
+def parse_parameter(parameter: str) -> MethodParameter:
+    declaration, default = split_default(parameter)
+    parts = declaration.split()
+    if not parts:
+        return MethodParameter(name="", type=None, default=default)
+    if len(parts) == 1:
+        return MethodParameter(name=parts[0], type=None, default=default)
+    return MethodParameter(name=parts[-1], type=" ".join(parts[:-1]), default=default)
+
+
+def parse_method_signature(method_source: str, fallback_name: str) -> MethodSignature:
+    """Parse the first X++ method declaration inside a SOURCE section."""
+    source_body = SOURCE_METHOD_RE.sub("", method_source, count=1).strip()
+    match = METHOD_SIGNATURE_RE.search(source_body)
+    if not match:
+        return MethodSignature(access=None, static=False, return_type=None, name=fallback_name, parameters=[])
+
+    name = match.group("name") or fallback_name
+    prefix_tokens = match.group("prefix").split()
+    access = next((token.lower() for token in prefix_tokens if token.lower() in ACCESS_MODIFIERS), None)
+    static = any(token.lower() == "static" for token in prefix_tokens)
+    name_index = len(prefix_tokens) - 1
+    return_type = None
+    for token in reversed(prefix_tokens[:name_index]):
+        if token.lower() not in SIGNATURE_MODIFIERS:
+            return_type = token
+            break
+
+    parameters = [parse_parameter(parameter) for parameter in split_parameters(match.group("parameters").strip())]
+    return MethodSignature(access=access, static=static, return_type=return_type, name=name, parameters=parameters)
+
+
 def extract_methods(source: str) -> list[MethodSource]:
     methods: list[MethodSource] = []
     for start_match in SOURCE_METHOD_RE.finditer(source):
@@ -231,15 +346,17 @@ def extract_methods(source: str) -> list[MethodSource]:
         start = start_match.start()
         end = section_end_offset(source, end_match.end())
         method_source = source[start:end]
+        fallback_name = start_match.group("name")
         methods.append(
             MethodSource(
-                name=start_match.group("name"),
+                name=fallback_name,
                 start=start,
                 end=end,
                 start_line=line_number(source, start),
                 end_line=line_number(source, end_match.start()),
                 source=method_source,
                 clean_source=mask_comments_and_strings(method_source),
+                signature=parse_method_signature(method_source, fallback_name),
             )
         )
     return methods
@@ -334,6 +451,7 @@ def analyze_source(source: str, include_source: bool = True) -> dict[str, Any]:
                 "start_line": method.start_line,
                 "end_line": method.end_line,
                 "source": method.source if include_source else None,
+                "signature": asdict(method.signature) if method.signature else None,
                 "operations": [op.__dict__ for op in method.operations],
                 "calls": method.calls,
                 "internal_calls": method.internal_calls,
