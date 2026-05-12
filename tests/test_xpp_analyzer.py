@@ -216,6 +216,59 @@ ENDSOURCE
             [{"name": "_salesId", "type": "SalesId", "default": '"001"'}],
         )
 
+    def test_signature_parser_ignores_preprocessor_and_comments_before_method(self):
+        source = """
+SOURCE #run
+#define.Fake(public void wrongDefine() {)
+#localmacro.FakeMethod
+public void wrongMacro()
+{
+}
+#endmacro
+// public void wrongLineComment()
+// {
+// }
+/*
+public void wrongBlockComment()
+{
+}
+*/
+protected static boolean run(int _count = 1)
+{
+}
+ENDSOURCE
+"""
+
+        result = analyze_source(source)
+        signature = result["methods"][0]["signature"]
+
+        self.assertEqual(signature["access"], "protected")
+        self.assertTrue(signature["static"])
+        self.assertEqual(signature["return_type"], "boolean")
+        self.assertEqual(signature["name"], "run")
+        self.assertEqual(signature["parameters"], [{"name": "_count", "type": "int", "default": "1"}])
+
+    def test_signature_parser_supports_entry_tokens_and_requires_return_type(self):
+        source = """
+SOURCE #doDisplay
+if (ready)
+{
+}
+public static server str doDisplay(str _value)
+{
+}
+ENDSOURCE
+"""
+
+        result = analyze_source(source)
+        signature = result["methods"][0]["signature"]
+
+        self.assertEqual(signature["access"], "public")
+        self.assertTrue(signature["static"])
+        self.assertEqual(signature["return_type"], "str")
+        self.assertEqual(signature["name"], "doDisplay")
+        self.assertEqual(signature["parameters"], [{"name": "_value", "type": "str", "default": None}])
+
 
 if __name__ == "__main__":
     unittest.main()

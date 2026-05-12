@@ -20,6 +20,8 @@ METHOD_HEADER_RE = re.compile(
 )
 SOURCE_METHOD_RE = re.compile(r"(?m)^\s*SOURCE\s+#(?P<name>[A-Za-z_]\w*)\s*$")
 ENDSOURCE_RE = re.compile(r"(?m)^\s*ENDSOURCE\s*$")
+PREPROCESSOR_LINE_RE = re.compile(r"(?m)^[^\S\n]*#.*(?:\n|$)")
+LOCALMACRO_BLOCK_RE = re.compile(r"(?im)^\s*#localmacro\b[\s\S]*?^\s*#endmacro[^\n]*(?:\n|$)")
 OPERATION_PATTERNS = {
     "while_select": re.compile(r"\bwhile\s+select\b", re.IGNORECASE),
     "select": re.compile(r"\bselect\b", re.IGNORECASE),
@@ -240,9 +242,13 @@ def section_end_offset(source: str, endsource_end: int) -> int:
 
 
 METHOD_SIGNATURE_RE = re.compile(
-    r"(?ims)^\s*(?!(?:if|while|for|switch|catch|using|else)\b)"
-    r"(?P<prefix>[^;{}=]*?\b(?P<name>[A-Za-z_]\w*))\s*"
-    r"\((?P<parameters>[^;{}]*)\)\s*\{"
+    r"^\s*"
+    r"(?P<modifiers>(?:public|private|protected)(?:\s+static)?|static|client|server|display|edit)"
+    r"(?:\s+(?P<qualifier>client|server|display|edit))*"
+    r"\s+(?P<return_type>[A-Za-z_]\w*)"
+    r"\s+(?P<name>[A-Za-z_]\w*)"
+    r"\s*\((?P<parameters>[^;{}]*)\)\s*\{",
+    re.IGNORECASE | re.MULTILINE,
 )
 ACCESS_MODIFIERS = {"public", "private", "protected"}
 SIGNATURE_MODIFIERS = ACCESS_MODIFIERS | {"static"}
@@ -314,25 +320,38 @@ def parse_parameter(parameter: str) -> MethodParameter:
     return MethodParameter(name=parts[-1], type=" ".join(parts[:-1]), default=default)
 
 
+def remove_signature_preprocessor_source(source: str) -> str:
+    """Remove X++ preprocessor-only lines and localmacro blocks before signature parsing."""
+    source = LOCALMACRO_BLOCK_RE.sub("", source)
+    return PREPROCESSOR_LINE_RE.sub("", source)
+
+
+def preprocess_signature_source(method_source: str) -> str:
+    """Prepare a SOURCE section for method-signature regex parsing."""
+    source_body = SOURCE_METHOD_RE.sub("", method_source, count=1)
+    source_body = source_body.replace("\r\n", "\n").replace("\r", "\n")
+    source_body = mask_comments_and_strings(source_body)
+    return remove_signature_preprocessor_source(source_body)
+
+
 def parse_method_signature(method_source: str, fallback_name: str) -> MethodSignature:
     """Parse the first X++ method declaration inside a SOURCE section."""
-    source_body = SOURCE_METHOD_RE.sub("", method_source, count=1).strip()
+    source_body = preprocess_signature_source(method_source)
     match = METHOD_SIGNATURE_RE.search(source_body)
     if not match:
         return MethodSignature(access=None, static=False, return_type=None, name=fallback_name, parameters=[])
 
     name = match.group("name") or fallback_name
-    prefix_tokens = match.group("prefix").split()
-    access = next((token.lower() for token in prefix_tokens if token.lower() in ACCESS_MODIFIERS), None)
-    static = any(token.lower() == "static" for token in prefix_tokens)
-    name_index = len(prefix_tokens) - 1
-    return_type = None
-    for token in reversed(prefix_tokens[:name_index]):
-        if token.lower() not in SIGNATURE_MODIFIERS:
-            return_type = token
-            break
+    modifier_tokens = match.group("modifiers").split()
+    access = next((token.lower() for token in modifier_tokens if token.lower() in ACCESS_MODIFIERS), None)
+    static = any(token.lower() == "static" for token in modifier_tokens)
+    return_type = match.group("return_type")
 
-    parameters = [parse_parameter(parameter) for parameter in split_parameters(match.group("parameters").strip())]
+    unmasked_source_body = SOURCE_METHOD_RE.sub("", method_source, count=1)
+    unmasked_source_body = unmasked_source_body.replace("\r\n", "\n").replace("\r", "\n")
+    unmasked_source_body = remove_signature_preprocessor_source(unmasked_source_body)
+    parameters_text = unmasked_source_body[match.start("parameters") : match.end("parameters")]
+    parameters = [parse_parameter(parameter) for parameter in split_parameters(parameters_text.strip())]
     return MethodSignature(access=access, static=static, return_type=return_type, name=name, parameters=parameters)
 
 
