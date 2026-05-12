@@ -425,6 +425,67 @@ ENDSOURCE
 
         self.assertEqual(result["methods"][0]["variables"], [])
 
+    def test_extracts_tables_and_fields_for_check_sales_id_range(self):
+        source = """
+SOURCE #checkSalesIdRange
+protected boolean checkSalesIdRange()
+{
+    SetEnumerator se;
+    LFL_SCSPickingWaveLine waveLine;
+    boolean ret;
+
+    while select forUpdate waveLine
+        where waveLine.PickingWaveId == this.parmPickingWaveId()
+           && waveLine.SalesId == salesId
+    {
+        if (waveLine.RecId)
+        {
+            waveLine.update();
+        }
+    }
+
+    return ret;
+}
+ENDSOURCE
+"""
+
+        result = analyze_source(source)
+        method = result["methods"][0]
+
+        self.assertEqual(method["tables"], ["LFL_SCSPickingWaveLine"])
+        self.assertEqual(method["fields"], ["PickingWaveId", "SalesId", "RecId"])
+
+    def test_table_and_field_extraction_filters_non_tables_and_buffer_methods(self):
+        source = """
+SOURCE #run
+public void run()
+{
+    CustTable custTable;
+    SalesTable salesTable;
+    boolean ret;
+    SetEnumerator se;
+
+    select firstOnly AccountNum from custTable
+        where custTable.AccountNum == "001";
+    while select forUpdate salesTable
+        where salesTable.CustAccount == custTable.AccountNum
+    {
+        salesTable.SalesId = "SO-001";
+        salesTable.update();
+        custTable.insert();
+    }
+}
+ENDSOURCE
+"""
+
+        result = analyze_source(source)
+        method = result["methods"][0]
+
+        self.assertEqual(method["tables"], ["CustTable", "SalesTable"])
+        self.assertEqual(method["fields"], ["AccountNum", "CustAccount", "SalesId"])
+        self.assertNotIn("update", method["fields"])
+        self.assertNotIn("insert", method["fields"])
+
 
 if __name__ == "__main__":
     unittest.main()

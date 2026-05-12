@@ -31,6 +31,7 @@ OPERATION_PATTERNS = {
     "delete": re.compile(r"\bdelete\b", re.IGNORECASE),
 }
 CALL_RE = re.compile(r"\b([A-Za-z_]\w*)\s*\(")
+FIELD_ACCESS_RE = re.compile(r"\b(?P<buffer>[A-Za-z_]\w*)\s*\.\s*(?P<field>[A-Za-z_]\w*)\b")
 INVALID_FILENAME_CHARS_RE = re.compile(r'[<>:"/\\|?*\x00-\x1f]+')
 IGNORED_CALL_NAMES = {
     "if",
@@ -74,6 +75,52 @@ CONTROL_FLOW_KEYWORDS = {
     "update_recordset",
     "while",
 }
+NON_TABLE_TYPES = {
+    "anytype",
+    "boolean",
+    "class",
+    "container",
+    "date",
+    "datetime",
+    "enum",
+    "guid",
+    "int",
+    "int64",
+    "list",
+    "map",
+    "object",
+    "real",
+    "set",
+    "setenumerator",
+    "str",
+    "string",
+    "time",
+    "utcdatetime",
+    "void",
+}
+SELECT_OPTION_KEYWORDS = {
+    "crosscompany",
+    "firstfast",
+    "firstonly",
+    "firstonly1",
+    "firstonly10",
+    "firstonly100",
+    "firstonly1000",
+    "forceindex",
+    "forcenestedloop",
+    "forceliterals",
+    "forceplaceholders",
+    "forceselectorder",
+    "forupdate",
+    "generateonly",
+    "nofetch",
+    "optimisticlock",
+    "order",
+    "pessimisticlock",
+    "reverse",
+    "validtimestate",
+}
+FIELD_METHOD_NAMES = {"clear", "delete", "doupdate", "insert", "reread", "update", "validatewrite"}
 
 
 @dataclass
@@ -116,6 +163,8 @@ class MethodSource:
     clean_source: str
     signature: MethodSignature | None = None
     variables: list[MethodVariable] = field(default_factory=list)
+    tables: list[str] = field(default_factory=list)
+    fields: list[str] = field(default_factory=list)
     operations: list[Operation] = field(default_factory=list)
     calls: list[str] = field(default_factory=list)
     internal_calls: list[str] = field(default_factory=list)
@@ -508,6 +557,95 @@ def find_variables(method: MethodSource) -> list[MethodVariable]:
     return variables
 
 
+def is_table_type(type_name: str) -> bool:
+    """Return True when a variable type is likely an X++ table buffer."""
+    return type_name.lower() not in NON_TABLE_TYPES and type_name.lower() not in CONTROL_FLOW_KEYWORDS
+
+
+def table_variable_map(method: MethodSource) -> dict[str, str]:
+    """Map local table-buffer variable names to their table types."""
+    return {variable.name: variable.type for variable in method.variables if is_table_type(variable.type)}
+
+
+def select_statement_segment(source: str, start: int) -> str:
+    """Return a bounded select statement fragment starting just after the select keyword."""
+    end_candidates = [
+        position for position in (source.find(";", start), source.find("{", start)) if position != -1
+    ]
+    end = min(end_candidates) if end_candidates else min(len(source), start + 500)
+    return source[start:end]
+
+
+def select_buffer_names(method: MethodSource) -> list[str]:
+    """Find table buffer identifiers used by select and while select statements."""
+    buffers: list[str] = []
+    for match in re.finditer(r"\b(?:while\s+)?select\b", method.clean_source, re.IGNORECASE):
+        segment = select_statement_segment(method.clean_source, match.end())
+        tokens = re.findall(r"\b[A-Za-z_]\w*\b", segment)
+        lower_tokens = [token.lower() for token in tokens]
+
+        if "from" in lower_tokens:
+            from_index = lower_tokens.index("from")
+            for token in tokens[from_index + 1 :]:
+                if token.lower() not in SELECT_OPTION_KEYWORDS:
+                    buffers.append(token)
+                    break
+            continue
+
+        for token in tokens:
+            lower_token = token.lower()
+            if lower_token in SELECT_OPTION_KEYWORDS:
+                continue
+            if lower_token in {"where", "join", "exists", "notexists", "outer", "index", "by"}:
+                break
+            buffers.append(token)
+            break
+    return buffers
+
+
+def find_tables(method: MethodSource) -> list[str]:
+    """Find table names referenced by local table buffers and select statements."""
+    table_variables = table_variable_map(method)
+    tables: list[str] = [variable.type for variable in method.variables if variable.name in table_variables]
+
+    for buffer in select_buffer_names(method):
+        table_name = table_variables.get(buffer)
+        if table_name:
+            tables.append(table_name)
+        elif is_table_type(buffer):
+            tables.append(buffer)
+
+    return unique_preserve_order(tables)
+
+
+def find_fields(method: MethodSource, table_variables: dict[str, str]) -> list[str]:
+    """Find field names accessed through known table-buffer variables."""
+    table_buffer_names = {name.lower() for name in table_variables}
+    excluded_field_names = {
+        method.name.lower(),
+        *IGNORED_CALL_NAMES,
+        *FIELD_METHOD_NAMES,
+        *(call.lower() for call in method.calls),
+        *(call.lower() for call in method.internal_calls),
+    }
+    fields: list[str] = []
+
+    for match in FIELD_ACCESS_RE.finditer(method.clean_source):
+        buffer = match.group("buffer")
+        field_name = match.group("field")
+        if buffer.lower() not in table_buffer_names:
+            continue
+        if field_name.lower() in excluded_field_names:
+            continue
+
+        tail = method.clean_source[match.end() :]
+        if re.match(r"\s*\(", tail):
+            continue
+
+        fields.append(field_name)
+    return unique_preserve_order(fields)
+
+
 def find_calls(method: MethodSource) -> list[str]:
     names = []
     for match in CALL_RE.finditer(method.clean_source):
@@ -534,10 +672,12 @@ def analyze_source(source: str, include_source: bool = True) -> dict[str, Any]:
 
     for method in methods:
         method.variables = find_variables(method)
+        method.tables = find_tables(method)
         method.operations = find_operations(method)
         method.calls = find_calls(method)
         method.internal_calls = [method_names[call.lower()] for call in method.calls if call.lower() in method_names]
         method.external_calls = [call for call in method.calls if call.lower() not in method_names]
+        method.fields = find_fields(method, table_variable_map(method))
 
     graph = {method.name: method.internal_calls for method in methods}
     called = {child for children in graph.values() for child in children}
@@ -560,6 +700,8 @@ def analyze_source(source: str, include_source: bool = True) -> dict[str, Any]:
                 "source": method.source if include_source else None,
                 "signature": asdict(method.signature) if method.signature else None,
                 "variables": [variable.__dict__ for variable in method.variables],
+                "tables": method.tables,
+                "fields": method.fields,
                 "operations": [op.__dict__ for op in method.operations],
                 "calls": method.calls,
                 "internal_calls": method.internal_calls,
