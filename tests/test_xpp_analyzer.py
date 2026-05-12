@@ -88,6 +88,47 @@ class Demo
         self.assertEqual(result["summary"]["method_count"], 1)
         self.assertEqual(result["methods"][0]["name"], "run")
 
+    def test_extracts_class_info_from_lfl_scspickingwaverun(self):
+        source = """
+PROPERTIES
+  Name                #LFL_SCSPickingWaveRun
+  Origin              #{local}
+ENDPROPERTIES
+
+class LFL_SCSPickingWaveRun extends RunBaseBatch
+{
+    #define.CurrentVersion(4)
+
+    public void run()
+    {
+    }
+}
+"""
+
+        result = analyze_source(source)
+
+        expected = {
+            "name": "LFL_SCSPickingWaveRun",
+            "extends": "RunBaseBatch",
+            "origin": "local",
+            "current_version": 4,
+        }
+        self.assertEqual(result["class_info"], expected)
+
+        xpo_source = """
+#PROPERTIES
+#  Name                #LFL_SCSPickingWaveRun
+#  Origin              #{local}
+#ENDPROPERTIES
+#
+#class LFL_SCSPickingWaveRun extends RunBaseBatch
+#{
+#    ##define.CurrentVersion(4)
+#}
+"""
+
+        self.assertEqual(analyze_source(xpo_source)["class_info"], expected)
+
     def test_lfl_scspickingwaverun_acceptance_does_not_extract_body_tokens_as_methods(self):
         source = """
 SOURCE #run
