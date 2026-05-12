@@ -18,6 +18,8 @@ METHOD_HEADER_RE = re.compile(
     r"(?m)^\s*(?!(?:if|while|for|switch|catch|using|else)\b)"
     r"[^\n;{}=]*?\b(?P<name>[A-Za-z_]\w*)\s*\([^;{}]*\)\s*\{"
 )
+SOURCE_METHOD_RE = re.compile(r"(?m)^\s*SOURCE\s+#(?P<name>[A-Za-z_]\w*)\s*$")
+ENDSOURCE_RE = re.compile(r"(?m)^\s*ENDSOURCE\s*$")
 OPERATION_PATTERNS = {
     "while_select": re.compile(r"\bwhile\s+select\b", re.IGNORECASE),
     "select": re.compile(r"\bselect\b", re.IGNORECASE),
@@ -153,24 +155,34 @@ def matching_brace(source: str, opening_brace: int) -> int:
     raise ValueError(f"No matching closing brace found for offset {opening_brace}")
 
 
+def section_end_offset(source: str, endsource_end: int) -> int:
+    """Return an offset that includes the whole ENDSOURCE line."""
+    if endsource_end < len(source) and source[endsource_end] == "\r":
+        endsource_end += 1
+    if endsource_end < len(source) and source[endsource_end] == "\n":
+        endsource_end += 1
+    return endsource_end
+
+
 def extract_methods(source: str) -> list[MethodSource]:
-    clean = mask_comments_and_strings(source)
     methods: list[MethodSource] = []
-    for match in METHOD_HEADER_RE.finditer(clean):
-        name = match.group("name")
-        opening = clean.find("{", match.start(), match.end())
-        closing = matching_brace(clean, opening)
-        method_source = source[match.start() : closing + 1]
-        clean_method_source = clean[match.start() : closing + 1]
+    for start_match in SOURCE_METHOD_RE.finditer(source):
+        end_match = ENDSOURCE_RE.search(source, start_match.end())
+        if not end_match:
+            continue
+
+        start = start_match.start()
+        end = section_end_offset(source, end_match.end())
+        method_source = source[start:end]
         methods.append(
             MethodSource(
-                name=name,
-                start=match.start(),
-                end=closing + 1,
-                start_line=line_number(source, match.start()),
-                end_line=line_number(source, closing),
+                name=start_match.group("name"),
+                start=start,
+                end=end,
+                start_line=line_number(source, start),
+                end_line=line_number(source, end_match.start()),
                 source=method_source,
-                clean_source=clean_method_source,
+                clean_source=mask_comments_and_strings(method_source),
             )
         )
     return methods
