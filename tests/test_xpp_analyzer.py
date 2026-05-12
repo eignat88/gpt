@@ -177,6 +177,45 @@ ENDSOURCE
         self.assertNotIn("name", names)
         self.assertNotIn("SalesIdRange", names)
 
+    def test_extracts_method_signature_metadata(self):
+        source = """
+SOURCE #checkSalesIdRange
+protected boolean checkSalesIdRange()
+{
+}
+ENDSOURCE
+"""
+
+        result = analyze_source(source)
+        signature = result["methods"][0]["signature"]
+
+        self.assertEqual(signature["access"], "protected")
+        self.assertFalse(signature["static"])
+        self.assertEqual(signature["return_type"], "boolean")
+        self.assertEqual(signature["name"], "checkSalesIdRange")
+        self.assertEqual(signature["parameters"], [])
+
+    def test_extracts_static_method_signature_parameters_and_defaults(self):
+        source = """
+SOURCE #run
+public static void run(SalesId _salesId = "001")
+{
+}
+ENDSOURCE
+"""
+
+        result = analyze_source(source)
+        signature = result["methods"][0]["signature"]
+
+        self.assertEqual(signature["access"], "public")
+        self.assertTrue(signature["static"])
+        self.assertEqual(signature["return_type"], "void")
+        self.assertEqual(signature["name"], "run")
+        self.assertEqual(
+            signature["parameters"],
+            [{"name": "_salesId", "type": "SalesId", "default": '"001"'}],
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
