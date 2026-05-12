@@ -231,6 +231,83 @@ ENDSOURCE
             [{"name": "_salesId", "type": "SalesId", "default": '"001"'}],
         )
 
+    def test_ignores_macros_directives_and_comments_before_method_signatures(self):
+        cases = [
+            (
+                "run",
+                """
+SOURCE #run
+#define.Test("1")
+public void run()
+{ }
+ENDSOURCE
+""",
+                {"access": "public", "static": False, "return_type": "void", "name": "run"},
+            ),
+            (
+                "pack",
+                """
+SOURCE #pack
+#localmacro.Test
+#endmacro
+public static container pack()
+{ }
+ENDSOURCE
+""",
+                {"access": "public", "static": True, "return_type": "container", "name": "pack"},
+            ),
+            (
+                "validate",
+                """
+SOURCE #validate
+// comment
+protected boolean validate()
+{ }
+ENDSOURCE
+""",
+                {"access": "protected", "static": False, "return_type": "boolean", "name": "validate"},
+            ),
+            (
+                "execute",
+                """
+SOURCE #execute
+/* block comment */
+private server void execute()
+{ }
+ENDSOURCE
+""",
+                {"access": "private", "static": False, "return_type": "void", "name": "execute"},
+            ),
+        ]
+
+        for expected_name, source, expected_signature in cases:
+            with self.subTest(method=expected_name):
+                result = analyze_source(source)
+                methods = result["methods"]
+                signature = methods[0]["signature"]
+
+                self.assertEqual(result["summary"]["method_count"], 1)
+                self.assertEqual(methods[0]["name"], expected_name)
+                self.assertEqual(signature["access"], expected_signature["access"])
+                self.assertEqual(signature["static"], expected_signature["static"])
+                self.assertEqual(signature["return_type"], expected_signature["return_type"])
+                self.assertEqual(signature["name"], expected_signature["name"])
+
+        sales_id_range_source = """
+SOURCE #SalesIdRange
+#define.SalesIdRange("SalesIdRange")
+public Object dialog()
+{ }
+ENDSOURCE
+"""
+
+        result = analyze_source(sales_id_range_source)
+        method_names = [method["name"] for method in result["methods"]]
+
+        self.assertEqual(result["summary"]["method_count"], 1)
+        self.assertEqual(method_names, ["dialog"])
+        self.assertNotIn("SalesIdRange", method_names)
+
     def test_signature_parser_ignores_preprocessor_and_comments_before_method(self):
         source = """
 SOURCE #run
