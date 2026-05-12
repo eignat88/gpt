@@ -90,6 +90,13 @@ class MethodVariable:
 
 
 @dataclass
+class MethodTableUsage:
+    table: str
+    variable: str
+    fields: list[str]
+
+
+@dataclass
 class MethodParameter:
     name: str
     type: str | None
@@ -116,6 +123,7 @@ class MethodSource:
     clean_source: str
     signature: MethodSignature | None = None
     variables: list[MethodVariable] = field(default_factory=list)
+    table_usages: list[MethodTableUsage] = field(default_factory=list)
     operations: list[Operation] = field(default_factory=list)
     calls: list[str] = field(default_factory=list)
     internal_calls: list[str] = field(default_factory=list)
@@ -508,6 +516,37 @@ def find_variables(method: MethodSource) -> list[MethodVariable]:
     return variables
 
 
+def find_table_usages(method: MethodSource) -> list[MethodTableUsage]:
+    """Find table buffers and fields referenced through local buffer variables."""
+    usages: list[MethodTableUsage] = []
+    variables_by_name = {variable.name: variable for variable in method.variables}
+    usage_by_name: dict[str, MethodTableUsage] = {}
+
+    for match in re.finditer(r"\b(?P<variable>[A-Za-z_]\w*)\s*\.\s*(?P<member>[A-Za-z_]\w*)\b", method.clean_source):
+        variable_name = match.group("variable")
+        variable = variables_by_name.get(variable_name)
+        if not variable:
+            continue
+
+        after_member = match.end()
+        while after_member < len(method.clean_source) and method.clean_source[after_member].isspace():
+            after_member += 1
+        if after_member < len(method.clean_source) and method.clean_source[after_member] == "(":
+            continue
+
+        usage = usage_by_name.get(variable_name)
+        if usage is None:
+            usage = MethodTableUsage(table=variable.type, variable=variable.name, fields=[])
+            usage_by_name[variable_name] = usage
+            usages.append(usage)
+
+        field_name = match.group("member")
+        if field_name.lower() not in {field.lower() for field in usage.fields}:
+            usage.fields.append(field_name)
+
+    return usages
+
+
 def find_calls(method: MethodSource) -> list[str]:
     names = []
     for match in CALL_RE.finditer(method.clean_source):
@@ -534,6 +573,7 @@ def analyze_source(source: str, include_source: bool = True) -> dict[str, Any]:
 
     for method in methods:
         method.variables = find_variables(method)
+        method.table_usages = find_table_usages(method)
         method.operations = find_operations(method)
         method.calls = find_calls(method)
         method.internal_calls = [method_names[call.lower()] for call in method.calls if call.lower() in method_names]
@@ -560,6 +600,9 @@ def analyze_source(source: str, include_source: bool = True) -> dict[str, Any]:
                 "source": method.source if include_source else None,
                 "signature": asdict(method.signature) if method.signature else None,
                 "variables": [variable.__dict__ for variable in method.variables],
+                "table_usages": [asdict(usage) for usage in method.table_usages],
+                "tables": unique_preserve_order(usage.table for usage in method.table_usages),
+                "fields": unique_preserve_order(field for usage in method.table_usages for field in usage.fields),
                 "operations": [op.__dict__ for op in method.operations],
                 "calls": method.calls,
                 "internal_calls": method.internal_calls,

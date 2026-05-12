@@ -210,6 +210,40 @@ ENDSOURCE
         self.assertEqual(signature["name"], "checkSalesIdRange")
         self.assertEqual(signature["parameters"], [])
 
+    def test_extracts_check_sales_id_range_table_fields_from_buffer_references(self):
+        source = """
+SOURCE #checkSalesIdRange
+protected boolean checkSalesIdRange()
+{
+    LFL_SCSPickingWaveLine waveLine;
+    boolean ret;
+
+    select firstOnly waveLine
+        where waveLine.PickingWaveId == this.parmPickingWaveId()
+           && waveLine.SalesId == salesTable.SalesId;
+
+    ret = waveLine.RecId != 0;
+    if (waveLine.SalesId)
+    {
+        waveLine.update();
+        this.helper();
+        strFmt("%1", waveLine.SalesId);
+    }
+
+    return ret;
+}
+ENDSOURCE
+"""
+
+        result = analyze_source(source)
+        method = result["methods"][0]
+
+        self.assertEqual(method["tables"], ["LFL_SCSPickingWaveLine"])
+        self.assertEqual(method["fields"], ["PickingWaveId", "SalesId", "RecId"])
+        self.assertNotIn("update", method["fields"])
+        self.assertNotIn("helper", method["fields"])
+        self.assertNotIn("strFmt", method["fields"])
+
     def test_extracts_static_method_signature_parameters_and_defaults(self):
         source = """
 SOURCE #run
