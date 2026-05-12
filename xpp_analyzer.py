@@ -347,16 +347,17 @@ def extract_methods(source: str) -> list[MethodSource]:
         end = section_end_offset(source, end_match.end())
         method_source = source[start:end]
         fallback_name = start_match.group("name")
+        signature = parse_method_signature(method_source, fallback_name)
         methods.append(
             MethodSource(
-                name=fallback_name,
+                name=signature.name if signature else fallback_name,
                 start=start,
                 end=end,
                 start_line=line_number(source, start),
                 end_line=line_number(source, end_match.start()),
                 source=method_source,
                 clean_source=mask_comments_and_strings(method_source),
-                signature=parse_method_signature(method_source, fallback_name),
+                signature=signature,
             )
         )
     return methods
