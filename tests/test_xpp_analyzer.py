@@ -1,6 +1,7 @@
 import unittest
+from pathlib import Path
 
-from xpp_analyzer import analyze_source, normalize_xpo_source
+from xpp_analyzer import analyze_source, normalize_xpo_source, output_path_for_result
 
 
 XPO_SAMPLE = """
@@ -128,6 +129,20 @@ class LFL_SCSPickingWaveRun extends RunBaseBatch
 """
 
         self.assertEqual(analyze_source(xpo_source)["class_info"], expected)
+
+    def test_default_output_uses_class_name_when_output_is_omitted(self):
+        source = """
+class LFL_SCSPickingWaveRun
+{
+    public void run()
+    {
+    }
+}
+"""
+
+        result = analyze_source(source)
+
+        self.assertEqual(output_path_for_result(result), Path("LFL_SCSPickingWaveRun.json"))
 
     def test_lfl_scspickingwaverun_acceptance_does_not_extract_body_tokens_as_methods(self):
         source = """
