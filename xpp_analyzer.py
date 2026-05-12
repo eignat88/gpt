@@ -50,6 +50,30 @@ IGNORED_CALL_NAMES = {
     "error",
     "checkfailed",
 }
+VARIABLE_DECLARATION_RE = re.compile(r"^\s*(?P<type>[A-Za-z_]\w*)\s+(?P<names>[^;]+);\s*$")
+CONTROL_FLOW_KEYWORDS = {
+    "break",
+    "case",
+    "catch",
+    "continue",
+    "default",
+    "delete_from",
+    "do",
+    "else",
+    "for",
+    "if",
+    "insert_recordset",
+    "return",
+    "select",
+    "switch",
+    "throw",
+    "try",
+    "ttsabort",
+    "ttsbegin",
+    "ttscommit",
+    "update_recordset",
+    "while",
+}
 
 
 @dataclass
@@ -57,6 +81,12 @@ class Operation:
     type: str
     line: int
     snippet: str
+
+
+@dataclass
+class MethodVariable:
+    type: str
+    name: str
 
 
 @dataclass
@@ -85,6 +115,7 @@ class MethodSource:
     source: str
     clean_source: str
     signature: MethodSignature | None = None
+    variables: list[MethodVariable] = field(default_factory=list)
     operations: list[Operation] = field(default_factory=list)
     calls: list[str] = field(default_factory=list)
     internal_calls: list[str] = field(default_factory=list)
@@ -422,6 +453,61 @@ def unique_preserve_order(items: Iterable[str]) -> list[str]:
     return result
 
 
+def method_body_start(method: MethodSource) -> int | None:
+    """Return the offset just after the method signature opening brace."""
+    for match in METHOD_HEADER_RE.finditer(method.clean_source):
+        if method.signature and match.group("name") != method.signature.name:
+            continue
+        return match.end()
+    return None
+
+
+def parse_variable_declaration_line(line: str) -> list[MethodVariable]:
+    """Parse a single X++ variable declaration line."""
+    statement_end = line.find(";")
+    if statement_end == -1:
+        return []
+    if "(" in line[:statement_end]:
+        return []
+
+    match = VARIABLE_DECLARATION_RE.match(line)
+    if not match:
+        return []
+
+    variable_type = match.group("type")
+    if variable_type.lower() in CONTROL_FLOW_KEYWORDS:
+        return []
+
+    variables: list[MethodVariable] = []
+    for raw_name in match.group("names").split(","):
+        name = raw_name.split("=", 1)[0].strip()
+        if not re.fullmatch(r"[A-Za-z_]\w*", name):
+            return []
+        if name.lower() in CONTROL_FLOW_KEYWORDS:
+            return []
+        variables.append(MethodVariable(type=variable_type, name=name))
+    return variables
+
+
+def find_variables(method: MethodSource) -> list[MethodVariable]:
+    """Find initial method-local variable declarations."""
+    body_start = method_body_start(method)
+    if body_start is None:
+        return []
+
+    variables: list[MethodVariable] = []
+    for line in method.clean_source[body_start:].splitlines():
+        stripped = line.strip()
+        if not stripped:
+            continue
+
+        declaration_variables = parse_variable_declaration_line(line)
+        if not declaration_variables:
+            break
+        variables.extend(declaration_variables)
+    return variables
+
+
 def find_calls(method: MethodSource) -> list[str]:
     names = []
     for match in CALL_RE.finditer(method.clean_source):
@@ -447,6 +533,7 @@ def analyze_source(source: str, include_source: bool = True) -> dict[str, Any]:
     method_names = {method.name.lower(): method.name for method in methods}
 
     for method in methods:
+        method.variables = find_variables(method)
         method.operations = find_operations(method)
         method.calls = find_calls(method)
         method.internal_calls = [method_names[call.lower()] for call in method.calls if call.lower() in method_names]
@@ -472,6 +559,7 @@ def analyze_source(source: str, include_source: bool = True) -> dict[str, Any]:
                 "end_line": method.end_line,
                 "source": method.source if include_source else None,
                 "signature": asdict(method.signature) if method.signature else None,
+                "variables": [variable.__dict__ for variable in method.variables],
                 "operations": [op.__dict__ for op in method.operations],
                 "calls": method.calls,
                 "internal_calls": method.internal_calls,

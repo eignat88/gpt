@@ -361,6 +361,70 @@ ENDSOURCE
         self.assertEqual(signature["name"], "doDisplay")
         self.assertEqual(signature["parameters"], [{"name": "_value", "type": "str", "default": None}])
 
+    def test_extracts_initial_method_variables(self):
+        source = """
+SOURCE #checkSalesIdRange
+protected boolean checkSalesIdRange()
+{
+    SetEnumerator se;
+    LFL_SCSPickingWaveLine waveLine;
+    boolean ret;
+    container data;
+
+    ret = true;
+    return ret;
+}
+ENDSOURCE
+"""
+
+        result = analyze_source(source)
+
+        self.assertEqual(
+            result["methods"][0]["variables"],
+            [
+                {"type": "SetEnumerator", "name": "se"},
+                {"type": "LFL_SCSPickingWaveLine", "name": "waveLine"},
+                {"type": "boolean", "name": "ret"},
+                {"type": "container", "name": "data"},
+            ],
+        )
+
+    def test_extracts_multiple_variables_of_same_type(self):
+        source = """
+SOURCE #run
+public void run()
+{
+    CustTable custTable, custTable2;
+
+    custTable = CustTable::find("001");
+}
+ENDSOURCE
+"""
+
+        result = analyze_source(source)
+
+        self.assertEqual(
+            result["methods"][0]["variables"],
+            [
+                {"type": "CustTable", "name": "custTable"},
+                {"type": "CustTable", "name": "custTable2"},
+            ],
+        )
+
+    def test_method_call_at_start_of_body_is_not_variable(self):
+        source = """
+SOURCE #run
+public void run()
+{
+    init();
+}
+ENDSOURCE
+"""
+
+        result = analyze_source(source)
+
+        self.assertEqual(result["methods"][0]["variables"], [])
+
 
 if __name__ == "__main__":
     unittest.main()
