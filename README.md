@@ -11,7 +11,7 @@ python xpp_analyzer.py path/to/MyClass.xpp -o analysis.json --ai-prompt ai-revie
 Options:
 
 - `input` — exported X++ class source file.
-- `-o, --output` — JSON output path; defaults to `xpp-analysis.json`.
+- `-o, --output` — JSON output path; when omitted, the analyzer writes `<ClassName>.json` based on `class_info.name` (falling back to `xpp-analysis.json` if no class name is found).
 - `--no-source` — omit full method bodies from JSON when you need a smaller artifact.
 - `--ai-prompt` — additionally writes a Markdown prompt with embedded JSON that can be pasted into an AI tool.
 
