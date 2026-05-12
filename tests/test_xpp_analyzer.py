@@ -177,6 +177,21 @@ ENDSOURCE
         self.assertNotIn("name", names)
         self.assertNotIn("SalesIdRange", names)
 
+    def test_xpo_source_marker_uses_signature_name_when_different(self):
+        source = """
+SOURCE #SalesIdRange
+public Object dialog()
+{
+}
+ENDSOURCE
+"""
+
+        result = analyze_source(source)
+
+        self.assertEqual(result["methods"][0]["name"], "dialog")
+        self.assertEqual(result["methods"][0]["signature"]["name"], "dialog")
+        self.assertEqual(result["summary"]["method_count"], 1)
+
     def test_extracts_method_signature_metadata(self):
         source = """
 SOURCE #checkSalesIdRange
