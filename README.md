@@ -23,8 +23,22 @@ The generated JSON includes:
 2. optional full method source;
 3. occurrences of `select`, `while select`, `ttsBegin`, `update`, `insert`, and `delete` with line numbers and snippets;
 4. detected calls to other methods;
-5. internal method call graph and tree;
-6. a short AI analysis prompt describing what to review.
+5. for each method:
+   - `"tables"` — tables found in variable declarations and `select` statements;
+   - `"fields"` — fields found in `where` clauses, `update` statements, assignments, and dot-member accesses;
+6. internal method call graph and tree;
+7. a short AI analysis prompt describing what to review.
+
+Example method-level table and field data:
+
+```json
+{
+  "tables": ["LFL_SCSPickingWaveLine"],
+  "fields": ["PickingWaveId", "SalesId", "RecId"]
+}
+```
+
+Local methods and standard functions should not be included in `"fields"`.
 
 ## Development check
 
