@@ -2,6 +2,18 @@
 
 `xpp_analyzer.py` extracts methods from an exported X++ class, keeps each method source, finds database and transaction operations, detects method calls, builds an internal call graph/tree, and writes the result to JSON for further AI review.
 
+## Project structure
+
+The analyzer is currently distributed as a single dependency-free module, with the code organized around these responsibilities:
+
+- `models` — dataclasses that describe parsed methods, signatures, parameters, variables, operations, and call-tree nodes.
+- `xpo` — helpers for normalizing XPO-exported text and extracting class metadata/properties from XPO or plain X++ sources.
+- `parser` — routines that find method bodies, parse method signatures, variables, operations, table/field references, and method calls.
+- `analysis` — call-graph and call-tree construction plus the high-level source analysis workflow.
+- `serialization` — conversion of dataclass-rich analysis results into JSON-compatible dictionaries.
+- `output` — default output-name generation and optional AI-review prompt rendering.
+- `cli` — command-line argument parsing and file-based execution for local analysis runs.
+
 ## Usage
 
 ```bash
@@ -14,6 +26,24 @@ Options:
 - `-o, --output` — JSON output path; when omitted, the analyzer writes `<ClassName>.json` based on `class_info.name` (falling back to `xpp-analysis.json` if no class name is found).
 - `--no-source` — omit full method bodies from JSON when you need a smaller artifact.
 - `--ai-prompt` — additionally writes a Markdown prompt with embedded JSON that can be pasted into an AI tool.
+
+## Library usage
+
+Use `analyze_source` when you want to run the analyzer from another Python script or application:
+
+```python
+from pathlib import Path
+
+from xpp_analyzer import analyze_source
+
+source_text = Path("path/to/MyClass.xpo").read_text(encoding="utf-8")
+result = analyze_source(source_text)
+
+summary = result["summary"]
+methods = result["methods"]
+```
+
+`source_text` can contain either plain X++ class text or an XPO export.
 
 ## JSON contents
 
@@ -41,6 +71,14 @@ Example method-level table and field data:
 Local methods and standard functions should not be included in `"fields"`.
 
 ## Development check
+
+The public, backwards-compatible library import remains:
+
+```python
+from xpp_analyzer import analyze_source
+```
+
+Run the test suite with:
 
 ```bash
 python -m unittest discover -s tests
