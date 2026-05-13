@@ -6,14 +6,24 @@
 
 ```bash
 python xpp_analyzer.py path/to/MyClass.xpp -o analysis.json --ai-prompt ai-review.md
+python xpp_analyzer.py path/to/dir
+python xpp_analyzer.py path/to/dir -o path/to/results
 ```
 
 Options:
 
-- `input` — exported X++ class source file.
-- `-o, --output` — JSON output path; when omitted, the analyzer writes `<ClassName>.json` based on `class_info.name` (falling back to `xpp-analysis.json` if no class name is found).
+- `input` — exported X++ class source file or a directory containing exported sources. Batch directory mode recursively scans `*.txt` and `*.xpo` files.
+- `-o, --output` — for file input, this is the JSON output path; when omitted, the analyzer writes `<ClassName>.json` based on `class_info.name` (falling back to `xpp-analysis.json` if no class name is found). For directory input, this is the output directory; when omitted, each JSON file is written next to its source file with a `.json` suffix. When provided for directory input, the analyzer preserves the input directory's relative structure under the output directory.
 - `--no-source` — omit full method bodies from JSON when you need a smaller artifact.
-- `--ai-prompt` — additionally writes a Markdown prompt with embedded JSON that can be pasted into an AI tool.
+- `--ai-prompt` — additionally writes a Markdown prompt with embedded JSON that can be pasted into an AI tool. This option is ignored with a warning in directory mode.
+
+Directory mode prints one `Processed: <path>` line per successful `*.txt` or `*.xpo` file, continues after per-file errors, and ends with a summary:
+
+```text
+Total files: N
+Processed: M
+Errors: K
+```
 
 ## JSON contents
 
