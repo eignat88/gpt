@@ -53,6 +53,7 @@ from xpp_analyzer.analyzer import (
     unique_preserve_order,
 )
 from xpp_analyzer.output import output_path_for_result, safe_filename
+from xpp_analyzer.linker import build_code_index, link_project_to_code
 
 
 def parse_args():
@@ -88,6 +89,7 @@ __all__ = [
     "Operation",
     "analyze_source",
     "build_call_tree",
+    "build_code_index",
     "extract_class_info",
     "extract_methods",
     "extract_properties",
@@ -99,6 +101,7 @@ __all__ = [
     "main",
     "is_table_type",
     "line_number",
+    "link_project_to_code",
     "mask_comments_and_strings",
     "matching_brace",
     "method_body_start",

@@ -512,4 +512,6 @@ def build_call_tree(method_name: str, graph: dict[str, list[str]], stack: tuple[
 def analyze_source(source: str, include_source: bool = True) -> dict[str, Any]:
     """Analyze X++ source and return the legacy dictionary representation."""
     from .analysis import analyze_source as analyze_source_new
-    return analyze_source_new(source, include_source)
+    result = analyze_source_new(source, include_source)
+    result["result_type"] = "class_xpp"
+    return result

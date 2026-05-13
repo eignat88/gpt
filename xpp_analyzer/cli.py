@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from xpp_analyzer import analyze_source, normalize_xpo_source, output_path_for_result, safe_filename
+from xpp_analyzer.linker import build_code_index, link_project_to_code
 
 DEFAULT_BATCH_INPUT_PATTERN = "*.txt"
 
@@ -34,11 +35,33 @@ def txt_files_in_directory(input_dir: Path) -> list[Path]:
 
 def result_output_path_for_input(result: dict[str, Any], source_path: Path, output_dir: Path) -> Path:
     """Build a batch output path, falling back to the input file stem when a class name is absent."""
+    if not isinstance(result.get("class_info"), dict):
+        source_stem = safe_filename(source_path.stem) or "xpp-analysis"
+        return output_dir / f"{source_stem}.json"
+
     candidate = output_path_for_result(result)
     if candidate.name == "xpp-analysis.json":
         source_stem = safe_filename(source_path.stem) or "xpp-analysis"
         candidate = Path(f"{source_stem}.json")
     return output_dir / candidate.name
+
+
+def analyze_or_load_batch_result(source_path: Path, *, include_source: bool) -> dict[str, Any]:
+    """Analyze an X++ source file or load an existing project/mixed JSON result."""
+    source = source_path.read_text(encoding="utf-8", errors="ignore")
+    try:
+        loaded_result = json.loads(source)
+    except json.JSONDecodeError:
+        loaded_result = None
+
+    if isinstance(loaded_result, dict) and (
+        loaded_result.get("technical_objects")
+        or loaded_result.get("result_type") in {"project", "mixed"}
+        or loaded_result.get("type") in {"project", "mixed"}
+    ):
+        return loaded_result
+
+    return analyze_source(normalize_xpo_source(source), include_source=include_source)
 
 
 def unique_output_path(path: Path, used_paths: set[Path]) -> Path:
@@ -118,10 +141,21 @@ def analyze_directory(args: argparse.Namespace) -> None:
         raise SystemExit("When input is a folder, --output must be a folder too")
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    used_paths: set[Path] = set()
+    analyzed_results: list[tuple[Path, dict[str, Any]]] = []
     for source_path in input_files:
-        source = source_path.read_text(encoding="utf-8", errors="ignore")
-        result = analyze_source(normalize_xpo_source(source), include_source=not args.no_source)
+        result = analyze_or_load_batch_result(source_path, include_source=not args.no_source)
+        analyzed_results.append((source_path, result))
+
+    code_index = build_code_index([result for _, result in analyzed_results])
+
+    used_paths: set[Path] = set()
+    for source_path, result in analyzed_results:
+        if (
+            result.get("technical_objects")
+            or result.get("result_type") in {"project", "mixed"}
+            or result.get("type") in {"project", "mixed"}
+        ):
+            result = link_project_to_code(result, code_index)
         output_path = unique_output_path(result_output_path_for_input(result, source_path, output_dir), used_paths)
         output_path.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
 
