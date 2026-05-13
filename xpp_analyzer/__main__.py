@@ -1,6 +1,6 @@
-"""Entry point for running xpp_analyzer as a module: python -m xpp_analyzer"""
+"""Run the X++ analyzer package as a module."""
 
-from xpp_analyzer.cli import main
+from .cli import main
 
 if __name__ == "__main__":
     main()

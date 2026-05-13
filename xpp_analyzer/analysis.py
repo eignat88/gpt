@@ -1,4 +1,4 @@
-"""Analysis of X++ operations, variables, tables, fields, and calls."""
+"""Analyze parsed X++ methods for operations, calls, tables, and fields."""
 
 from __future__ import annotations
 
@@ -6,15 +6,11 @@ import re
 from dataclasses import asdict
 from typing import Any
 
-from xpp_analyzer.models import MethodSource, MethodVariable, Operation
-from xpp_analyzer.parser import extract_methods
-from xpp_analyzer.text import line_number, snippet_for, unique_preserve_order
-from xpp_analyzer.xpo import extract_class_info
+from .models import MethodSource, MethodVariable, Operation
+from .parser import METHOD_HEADER_RE, extract_methods
+from .utils import line_number, unique_preserve_order
+from .xpo import extract_class_info
 
-METHOD_HEADER_RE = re.compile(
-    r"(?m)^\s*(?!(?:if|while|for|switch|catch|using|else)\b)"
-    r"[^\n;{}=]*?\b(?P<name>[A-Za-z_]\w*)\s*\([^;{}]*\)\s*\{"
-)
 OPERATION_PATTERNS = {
     "while_select": re.compile(r"\bwhile\s+select\b", re.IGNORECASE),
     "select": re.compile(r"\bselect\b", re.IGNORECASE),
@@ -113,6 +109,14 @@ SELECT_OPTION_KEYWORDS = {
     "validtimestate",
 }
 FIELD_METHOD_NAMES = {"clear", "delete", "doupdate", "insert", "reread", "update", "validatewrite"}
+
+
+def snippet_for(source: str, local_offset: int) -> str:
+    line_start = source.rfind("\n", 0, local_offset) + 1
+    line_end = source.find("\n", local_offset)
+    if line_end == -1:
+        line_end = len(source)
+    return source[line_start:line_end].strip()
 
 
 def find_operations(method: MethodSource) -> list[Operation]:

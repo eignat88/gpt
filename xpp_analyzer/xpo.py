@@ -1,9 +1,12 @@
-"""XPO normalization and metadata extraction helpers."""
+"""Helpers for XPO-exported source text."""
 
 from __future__ import annotations
 
 import re
 from typing import Any
+
+PREPROCESSOR_LINE_RE = re.compile(r"(?m)^[^\S\n]*#.*(?:\n|$)")
+LOCALMACRO_BLOCK_RE = re.compile(r"(?im)^\s*#localmacro\b[\s\S]*?^\s*#endmacro[^\n]*(?:\n|$)")
 
 
 def normalize_xpo_source(text: str) -> str:
@@ -72,3 +75,9 @@ def extract_class_info(source: str) -> dict[str, Any]:
         "origin": properties.get("origin"),
         "current_version": current_version,
     }
+
+
+def remove_signature_preprocessor_source(source: str) -> str:
+    """Remove X++ preprocessor-only lines and localmacro blocks before signature parsing."""
+    source = LOCALMACRO_BLOCK_RE.sub("", source)
+    return PREPROCESSOR_LINE_RE.sub("", source)

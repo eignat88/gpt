@@ -1,4 +1,4 @@
-"""Dataclass models for X++ source analysis."""
+"""Data models for X++ source analysis."""
 
 from __future__ import annotations
 

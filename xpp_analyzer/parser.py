@@ -1,12 +1,19 @@
-"""Method and signature parsing for X++ SOURCE sections."""
+"""Parse X++ method sections and signatures."""
 
 from __future__ import annotations
 
 import re
 
-from xpp_analyzer.models import MethodParameter, MethodSignature, MethodSource
-from xpp_analyzer.text import line_number, mask_comments_and_strings, section_end_offset
+from .models import MethodParameter, MethodSignature, MethodSource
+from .utils import line_number, mask_comments_and_strings, section_end_offset
+from .xpo import remove_signature_preprocessor_source
 
+METHOD_HEADER_RE = re.compile(
+    r"(?m)^\s*(?!(?:if|while|for|switch|catch|using|else)\b)"
+    r"[^\n;{}=]*?\b(?P<name>[A-Za-z_]\w*)\s*\([^;{}]*\)\s*\{"
+)
+SOURCE_METHOD_RE = re.compile(r"(?m)^\s*SOURCE\s+#(?P<name>[A-Za-z_]\w*)\s*$")
+ENDSOURCE_RE = re.compile(r"(?m)^\s*ENDSOURCE\s*$")
 METHOD_SIGNATURE_RE = re.compile(
     r"^\s*"
     r"(?P<modifiers>(?:public|private|protected)(?:\s+static)?|static|client|server|display|edit)"
@@ -16,11 +23,8 @@ METHOD_SIGNATURE_RE = re.compile(
     r"\s*\((?P<parameters>[^;{}]*)\)\s*\{",
     re.IGNORECASE | re.MULTILINE,
 )
-SOURCE_METHOD_RE = re.compile(r"(?m)^\s*SOURCE\s+#(?P<name>[A-Za-z_]\w*)\s*$")
-ENDSOURCE_RE = re.compile(r"(?m)^\s*ENDSOURCE\s*$")
-PREPROCESSOR_LINE_RE = re.compile(r"(?m)^[^\S\n]*#.*(?:\n|$)")
-LOCALMACRO_BLOCK_RE = re.compile(r"(?im)^\s*#localmacro\b[\s\S]*?^\s*#endmacro[^\n]*(?:\n|$)")
 ACCESS_MODIFIERS = {"public", "private", "protected"}
+SIGNATURE_MODIFIERS = ACCESS_MODIFIERS | {"static"}
 
 
 def split_parameters(parameters: str) -> list[str]:
@@ -87,12 +91,6 @@ def parse_parameter(parameter: str) -> MethodParameter:
     if len(parts) == 1:
         return MethodParameter(name=parts[0], type=None, default=default)
     return MethodParameter(name=parts[-1], type=" ".join(parts[:-1]), default=default)
-
-
-def remove_signature_preprocessor_source(source: str) -> str:
-    """Remove X++ preprocessor-only lines and localmacro blocks before signature parsing."""
-    source = LOCALMACRO_BLOCK_RE.sub("", source)
-    return PREPROCESSOR_LINE_RE.sub("", source)
 
 
 def preprocess_signature_source(method_source: str) -> str:
