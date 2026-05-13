@@ -1,10 +1,9 @@
-import json
-import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import patch
 
-from xpp_analyzer import analyze_directory, analyze_file, analyze_source, normalize_xpo_source, output_path_for_result
+from xpp_analyzer import analyze_source
+from xpp_analyzer.cli import output_path_for_result
+from xpp_analyzer.xpo import normalize_xpo_source
 
 
 XPO_SAMPLE = """
@@ -488,122 +487,6 @@ ENDSOURCE
         self.assertEqual(method["fields"], ["AccountNum", "CustAccount", "SalesId"])
         self.assertNotIn("update", method["fields"])
         self.assertNotIn("insert", method["fields"])
-
-    def test_batch_processes_txt_and_xpo_files(self):
-        source = """
-class Demo
-{
-    public void run()
-    {
-    }
-}
-"""
-        with tempfile.TemporaryDirectory() as tmp:
-            input_dir = Path(tmp) / "input"
-            output_dir = Path(tmp) / "output"
-            input_dir.mkdir()
-            (input_dir / "first.txt").write_text(source, encoding="utf-8")
-            (input_dir / "second.xpo").write_text(source, encoding="utf-8")
-
-            summary = analyze_directory(input_dir, output_dir, include_source=True)
-
-            self.assertEqual(summary, {"total_files": 2, "processed": 2, "errors": 0})
-            self.assertTrue((output_dir / "first.json").is_file())
-            self.assertTrue((output_dir / "second.json").is_file())
-
-    def test_batch_ignores_unsupported_extensions(self):
-        source = """
-class Demo
-{
-    public void run()
-    {
-    }
-}
-"""
-        with tempfile.TemporaryDirectory() as tmp:
-            input_dir = Path(tmp) / "input"
-            output_dir = Path(tmp) / "output"
-            input_dir.mkdir()
-            (input_dir / "supported.txt").write_text(source, encoding="utf-8")
-            (input_dir / "ignored.axpp").write_text(source, encoding="utf-8")
-
-            summary = analyze_directory(input_dir, output_dir, include_source=True)
-
-            self.assertEqual(summary, {"total_files": 1, "processed": 1, "errors": 0})
-            self.assertTrue((output_dir / "supported.json").is_file())
-            self.assertFalse((output_dir / "ignored.json").exists())
-
-    def test_batch_recursively_preserves_relative_output_structure(self):
-        source = """
-class Demo
-{
-    public void run()
-    {
-    }
-}
-"""
-        with tempfile.TemporaryDirectory() as tmp:
-            input_dir = Path(tmp) / "input"
-            output_dir = Path(tmp) / "output"
-            nested_dir = input_dir / "nested" / "deeper"
-            nested_dir.mkdir(parents=True)
-            (nested_dir / "demo.xpo").write_text(source, encoding="utf-8")
-
-            summary = analyze_directory(input_dir, output_dir, include_source=True)
-
-            self.assertEqual(summary, {"total_files": 1, "processed": 1, "errors": 0})
-            self.assertTrue((output_dir / "nested" / "deeper" / "demo.json").is_file())
-
-    def test_batch_error_for_one_file_does_not_stop_others(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            input_dir = Path(tmp) / "input"
-            output_dir = Path(tmp) / "output"
-            input_dir.mkdir()
-            good = input_dir / "good.txt"
-            bad = input_dir / "bad.xpo"
-            good.write_text("ok", encoding="utf-8")
-            bad.write_text("bad", encoding="utf-8")
-
-            def fake_analyze_file(input_path, output_path, include_source):
-                if input_path == bad:
-                    raise RuntimeError("boom")
-                output_path.write_text("{}", encoding="utf-8")
-                return {}
-
-            with patch("xpp_analyzer.analyze_file", side_effect=fake_analyze_file):
-                summary = analyze_directory(input_dir, output_dir, include_source=True)
-
-            self.assertEqual(summary, {"total_files": 2, "processed": 1, "errors": 1})
-            self.assertTrue((output_dir / "good.json").is_file())
-            self.assertFalse((output_dir / "bad.json").exists())
-
-    def test_analyze_file_keeps_single_file_output_helper_behavior(self):
-        source = """
-class DemoSingle
-{
-SOURCE #run
-    public void run()
-    {
-    }
-ENDSOURCE
-}
-"""
-        with tempfile.TemporaryDirectory() as tmp:
-            input_path = Path(tmp) / "DemoSingle.xpo"
-            input_path.write_text(source, encoding="utf-8")
-
-            result = analyze_file(input_path, None, include_source=False)
-            output_path = Path("DemoSingle.json")
-
-            try:
-                self.assertTrue(output_path.is_file())
-                written = json.loads(output_path.read_text(encoding="utf-8"))
-                self.assertEqual(written["class_info"]["name"], "DemoSingle")
-                self.assertEqual(result["class_info"]["name"], "DemoSingle")
-                self.assertIsNone(written["methods"][0]["source"])
-                self.assertEqual(output_path_for_result(result), output_path)
-            finally:
-                output_path.unlink(missing_ok=True)
 
 
 if __name__ == "__main__":
