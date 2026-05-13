@@ -1,4 +1,4 @@
-"""Output path and filename helpers."""
+"""Output path helpers for X++ analyzer results."""
 
 from __future__ import annotations
 

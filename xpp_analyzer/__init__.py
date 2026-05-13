@@ -1,25 +1,122 @@
 """Public API for the X++ analyzer."""
 
-from __future__ import annotations
+from xpp_analyzer.analyzer import (
+    CALL_RE,
+    CONTROL_FLOW_KEYWORDS,
+    ENDSOURCE_RE,
+    FIELD_ACCESS_RE,
+    FIELD_METHOD_NAMES,
+    IGNORED_CALL_NAMES,
+    LOCALMACRO_BLOCK_RE,
+    METHOD_HEADER_RE,
+    NON_TABLE_TYPES,
+    OPERATION_PATTERNS,
+    PREPROCESSOR_LINE_RE,
+    SELECT_OPTION_KEYWORDS,
+    SOURCE_METHOD_RE,
+    VARIABLE_DECLARATION_RE,
+    MethodParameter,
+    MethodSignature,
+    MethodSource,
+    MethodVariable,
+    Operation,
+    analyze_source,
+    build_call_tree,
+    extract_class_info,
+    extract_methods,
+    extract_properties,
+    find_calls,
+    find_fields,
+    find_operations,
+    find_tables,
+    find_variables,
+    is_table_type,
+    line_number,
+    mask_comments_and_strings,
+    matching_brace,
+    method_body_start,
+    normalize_xpo_source,
+    parse_variable_declaration_line,
+    preprocess_signature_source,
+    remove_signature_preprocessor_source,
+    section_end_offset,
+    select_buffer_names,
+    select_statement_segment,
+    snippet_for,
+    split_default,
+    split_parameters,
+    parse_method_signature,
+    parse_parameter,
+    strip_xpo_value,
+    table_variable_map,
+    unique_preserve_order,
+)
+from xpp_analyzer.output import output_path_for_result, safe_filename
 
-from .analysis import analyze_model, analyze_source, normalize_xpo_source, output_path_for_result, safe_filename
-from .cli import main
-from .models import AnalysisResult, MethodParameter, MethodSignature, MethodSource, MethodVariable, Operation
-from .serialization import analysis_to_dict
 
+def parse_args():
+    from xpp_analyzer.cli import parse_args as cli_parse_args
+
+    return cli_parse_args()
+
+
+def main() -> None:
+    from xpp_analyzer.cli import main as cli_main
+
+    cli_main()
 
 __all__ = [
-    "AnalysisResult",
+    "CALL_RE",
+    "CONTROL_FLOW_KEYWORDS",
+    "ENDSOURCE_RE",
+    "FIELD_ACCESS_RE",
+    "FIELD_METHOD_NAMES",
+    "IGNORED_CALL_NAMES",
+    "LOCALMACRO_BLOCK_RE",
+    "METHOD_HEADER_RE",
+    "NON_TABLE_TYPES",
+    "OPERATION_PATTERNS",
+    "PREPROCESSOR_LINE_RE",
+    "SELECT_OPTION_KEYWORDS",
+    "SOURCE_METHOD_RE",
+    "VARIABLE_DECLARATION_RE",
     "MethodParameter",
     "MethodSignature",
     "MethodSource",
     "MethodVariable",
     "Operation",
-    "analysis_to_dict",
-    "analyze_model",
     "analyze_source",
+    "build_call_tree",
+    "extract_class_info",
+    "extract_methods",
+    "extract_properties",
+    "find_calls",
+    "find_fields",
+    "find_operations",
+    "find_tables",
+    "find_variables",
     "main",
+    "is_table_type",
+    "line_number",
+    "mask_comments_and_strings",
+    "matching_brace",
+    "method_body_start",
     "normalize_xpo_source",
+    "parse_variable_declaration_line",
+    "preprocess_signature_source",
+    "remove_signature_preprocessor_source",
+    "section_end_offset",
+    "select_buffer_names",
+    "select_statement_segment",
+    "snippet_for",
+    "split_default",
+    "split_parameters",
     "output_path_for_result",
+    "parse_args",
+    "parse_method_signature",
+    "parse_parameter",
     "safe_filename",
+    "strip_xpo_value",
+    "table_variable_map",
+    "unique_preserve_order",
 ]
