@@ -1,6 +1,6 @@
 """Public API for the X++ analyzer."""
 
-from xpp_analyzer.analyzer import (
+from xpp_analyzer.class_parser import (
     CALL_RE,
     CONTROL_FLOW_KEYWORDS,
     ENDSOURCE_RE,
@@ -15,11 +15,13 @@ from xpp_analyzer.analyzer import (
     SELECT_OPTION_KEYWORDS,
     SOURCE_METHOD_RE,
     VARIABLE_DECLARATION_RE,
+    AnalysisResult,
     MethodParameter,
     MethodSignature,
     MethodSource,
     MethodVariable,
     Operation,
+    analyze_model,
     analyze_source,
     build_call_tree,
     extract_class_info,
@@ -53,6 +55,10 @@ from xpp_analyzer.analyzer import (
 )
 from xpp_analyzer.output import output_path_for_result, safe_filename
 
+from xpp_analyzer.document_classifier import DocumentClassification, DocumentKind, classify_document
+from xpp_analyzer.linker import LinkResult, MethodRef, link_analysis_results
+from xpp_analyzer.project_parser import DEFAULT_SOURCE_PATTERNS, ParsedDocument, iter_source_files, parse_project
+
 
 def parse_args():
     from xpp_analyzer.cli import parse_args as cli_parse_args
@@ -80,13 +86,25 @@ __all__ = [
     "SELECT_OPTION_KEYWORDS",
     "SOURCE_METHOD_RE",
     "VARIABLE_DECLARATION_RE",
+    "AnalysisResult",
+    "DEFAULT_SOURCE_PATTERNS",
+    "DocumentClassification",
+    "DocumentKind",
+    "LinkResult",
+    "MethodRef",
+    "ParsedDocument",
     "MethodParameter",
     "MethodSignature",
     "MethodSource",
     "MethodVariable",
     "Operation",
+    "analyze_model",
     "analyze_source",
     "build_call_tree",
+    "classify_document",
+    "iter_source_files",
+    "link_analysis_results",
+    "parse_project",
     "extract_class_info",
     "extract_methods",
     "extract_properties",
