@@ -1,7 +1,8 @@
 import unittest
 from pathlib import Path
 
-from xpp_analyzer import analyze_source, normalize_xpo_source, output_path_for_result
+from xpp_analyzer import analyze_model, analyze_source, normalize_xpo_source, output_path_for_result
+from xpp_analyzer.models import AnalysisResult
 
 
 XPO_SAMPLE = """
@@ -63,6 +64,17 @@ class AnalyzerTest(unittest.TestCase):
         self.assertEqual(result["call_graph"], {"run": ["helper"], "helper": []})
         self.assertEqual(result["call_tree"][0]["method"], "run")
         self.assertEqual(result["call_tree"][0]["calls"][0]["method"], "helper")
+
+
+    def test_analyze_model_returns_typed_result_without_serialization_layer(self):
+        result = analyze_model(XPO_SAMPLE)
+
+        self.assertIsInstance(result, AnalysisResult)
+        self.assertEqual(result.summary["method_count"], 2)
+        self.assertEqual(result.call_graph, {"run": ["helper"], "helper": []})
+        self.assertEqual([method.name for method in result.methods], ["run", "helper"])
+        self.assertEqual(result.methods[0].internal_calls, ["helper"])
+        self.assertEqual(result.methods[0].source.strip().splitlines()[0], "SOURCE #run")
 
     def test_xpo_sections_do_not_extract_control_flow_or_identifiers_as_methods(self):
         result = analyze_source(XPO_SAMPLE)
