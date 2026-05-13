@@ -1,44 +1,90 @@
 import unittest
 
-from xpp_analyzer import extract_technical_objects
+from xpp_analyzer.project_parser import analyze_project_description
 
 
 class ProjectParserTest(unittest.TestCase):
-    def test_extracts_requested_technical_object_examples(self):
+    def test_analyzes_russian_functional_design_document(self):
         text = """
-        InventUpd_Reservation calls reserveNow().
-        WHSInventBatchReserveQueryBuilder builds InventBatch.ALK_EcMarkCodeApplied filters.
-        LFL_SCSPickingWaveItems should be treated as a technical object candidate.
-        """
+# DAX-11253 Автоматизация закрытия заявок
 
-        result = extract_technical_objects(text)
-        technical_objects = result["technical_objects"]
+Цель:
+Сократить ручную обработку заявок после подтверждения поставки.
 
-        self.assertEqual(technical_objects["classes"], ["InventUpd_Reservation"])
-        self.assertEqual(technical_objects["queries"], ["WHSInventBatchReserveQueryBuilder"])
-        self.assertEqual(technical_objects["tables"], ["InventBatch", "LFL_SCSPickingWaveItems"])
-        self.assertEqual(technical_objects["fields"], ["InventBatch.ALK_EcMarkCodeApplied"])
-        self.assertIn("reserveNow", technical_objects["methods"])
+Проблема
+Операторы вручную сверяют статус поставки и забывают закрывать часть заявок.
 
-    def test_extracts_methods_services_batch_jobs_enums_and_preserves_order(self):
-        text = """
-        SalesPostingService::runOperation();
-        SalesPostingService.runOperation();
-        CustInvoiceController.startOperation();
-        processLine();
-        processLine();
-        SalesStatusEnum::Invoiced;
-        """
+Бизнес-процесс
+1. Менеджер подтверждает поставку в AX.
+2. Система проверяет связанные строки заявки.
 
-        result = extract_technical_objects(text)["technical_objects"]
+Ограничения
+- Не менять существующие статусы архивных заявок.
 
-        self.assertEqual(result["services"], ["SalesPostingService"])
-        self.assertEqual(result["batch_jobs"], ["CustInvoiceController"])
-        self.assertEqual(result["enums"], ["SalesStatusEnum"])
+Ожидаемый результат
+Заявка автоматически закрывается после подтверждения всех строк поставки.
+
+Риски
+- Некорректное закрытие частично поставленных заявок.
+- Повторный запуск пакетного задания.
+
+Зависимости
+- Справочник статусов заявок.
+- Batch-задание синхронизации поставок.
+
+Алгоритм
+1. Найти заявки со статусом "Поставка подтверждена".
+2. Проверить, что все строки поставлены.
+3. Установить статус "Закрыта" и записать дату закрытия.
+
+Требования
+- Закрывать только заявки по проекту DAX-11253.
+- Логировать идентификатор заявки и пользователя.
+"""
+
+        result = analyze_project_description(text, source_file="fd/DAX-11253.md")
+
+        self.assertEqual(result["project"]["code"], "DAX-11253")
+        self.assertEqual(result["project"]["title"], "Автоматизация закрытия заявок")
+        self.assertEqual(result["project"]["source_file"], "fd/DAX-11253.md")
+        self.assertIn("Сократить ручную обработку", result["sections"]["goal"])
+        self.assertIn("Операторы вручную", result["sections"]["problem"])
+        self.assertIn("Менеджер подтверждает", result["sections"]["business_process"])
+        self.assertIn("Не менять существующие", result["sections"]["constraints"])
+        self.assertIn("автоматически закрывается", result["sections"]["expected_result"])
         self.assertEqual(
-            result["methods"],
-            ["SalesPostingService.runOperation", "CustInvoiceController.startOperation", "processLine"],
+            result["business_requirements"],
+            [
+                "Закрывать только заявки по проекту DAX-11253",
+                "Логировать идентификатор заявки и пользователя",
+            ],
         )
+        self.assertEqual(
+            result["algorithms"],
+            [
+                "Найти заявки со статусом \"Поставка подтверждена\"",
+                "Проверить, что все строки поставлены",
+                "Установить статус \"Закрыта\" и записать дату закрытия",
+            ],
+        )
+        self.assertEqual(
+            result["dependencies"],
+            ["Справочник статусов заявок", "Batch-задание синхронизации поставок"],
+        )
+        self.assertEqual(
+            result["risks"],
+            ["Некорректное закрытие частично поставленных заявок", "Повторный запуск пакетного задания"],
+        )
+
+    def test_extracts_fd_and_sup_codes_and_title_next_to_code(self):
+        fd_result = analyze_project_description("FD-CRM-42: Интеграция с CRM\n\nRequirements:\n- Send customer updates")
+        sup_result = analyze_project_description("Project code: SUP-77\nTitle: Исправление остатков")
+
+        self.assertEqual(fd_result["project"]["code"], "FD-CRM-42")
+        self.assertEqual(fd_result["project"]["title"], "Интеграция с CRM")
+        self.assertEqual(fd_result["business_requirements"], ["Send customer updates"])
+        self.assertEqual(sup_result["project"]["code"], "SUP-77")
+        self.assertEqual(sup_result["project"]["title"], "Исправление остатков")
 
 
 if __name__ == "__main__":
