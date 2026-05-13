@@ -32,6 +32,110 @@ class LFL_SCSPickingWaveRun
 
         self.assertEqual(output_path_for_result(result), Path("xpp-analysis.json"))
 
+    def test_class_xpp_output_keeps_legacy_fields_and_document_type(self):
+        result = analyze_source(
+            """
+class DemoClass
+{
+}
+SOURCE #run
+public void run()
+{
+}
+ENDSOURCE
+"""
+        )
+
+        self.assertEqual(result["document_type"], "class_xpp")
+        self.assertEqual(
+            set(result),
+            {
+                "document_type",
+                "class_info",
+                "summary",
+                "methods",
+                "call_graph",
+                "call_tree",
+                "ai_analysis_prompt",
+            },
+        )
+        self.assertEqual(result["class_info"]["name"], "DemoClass")
+        self.assertEqual(result["methods"][0]["name"], "run")
+
+    def test_project_document_output_has_stable_json_schema(self):
+        result = analyze_source(
+            """
+# Project: Warehouse wave automation
+Module: SCM
+Owner: Operations
+
+## Business requirements
+- BR-1: Create picking waves automatically.
+
+## Technical objects
+- Class: LFL_SCSPickingWaveRun
+- Table: WMSPickingRoute
+
+## Algorithms
+- Validate input ranges before creating waves.
+
+## Dependencies
+- Batch framework must be available.
+
+## Risks
+- Duplicate wave creation if retries are not idempotent.
+""",
+            source_file="docs/wave.md",
+        )
+
+        self.assertEqual(
+            list(result),
+            [
+                "document_type",
+                "source_file",
+                "project",
+                "business_requirements",
+                "technical_objects",
+                "algorithms",
+                "dependencies",
+                "risks",
+                "matches_with_code",
+            ],
+        )
+        self.assertEqual(result["document_type"], "project_document")
+        self.assertEqual(result["source_file"], "docs/wave.md")
+        self.assertEqual(result["project"]["name"], "Warehouse wave automation")
+        self.assertEqual(result["project"]["module"], "SCM")
+        self.assertEqual(result["project"]["owner"], "Operations")
+        self.assertEqual(result["business_requirements"][0]["id"], "BR-1")
+        self.assertEqual(result["technical_objects"]["classes"], ["LFL_SCSPickingWaveRun"])
+        self.assertEqual(result["technical_objects"]["tables"], ["WMSPickingRoute"])
+        self.assertEqual(result["matches_with_code"][0]["object_name"], "LFL_SCSPickingWaveRun")
+
+    def test_mixed_document_contains_project_schema_and_nested_xpp_analysis(self):
+        result = analyze_source(
+            """
+# Project: Mixed wave document
+
+## Business requirements
+- BR-2: Run validation before updating table SalesTable.
+
+SOURCE #run
+public void run()
+{
+    SalesTable salesTable;
+    salesTable.update();
+}
+ENDSOURCE
+"""
+        )
+
+        self.assertEqual(result["document_type"], "mixed_document")
+        self.assertIn("xpp_analysis", result)
+        self.assertEqual(result["xpp_analysis"]["document_type"], "class_xpp")
+        self.assertEqual(result["xpp_analysis"]["summary"]["method_count"], 1)
+        self.assertEqual(result["technical_objects"]["tables"], ["SalesTable"])
+
 
 if __name__ == "__main__":
     unittest.main()

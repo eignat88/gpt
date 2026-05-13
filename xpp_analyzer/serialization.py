@@ -12,6 +12,7 @@ from .prompts import AI_ANALYSIS_PROMPT
 def analysis_to_dict(result: AnalysisResult, include_source: bool = True) -> dict[str, Any]:
     """Convert a typed analysis result into the legacy JSON-ready dictionary."""
     return {
+        "document_type": "class_xpp",
         "class_info": result.class_info,
         "summary": result.summary,
         "methods": [

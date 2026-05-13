@@ -58,6 +58,14 @@ def unique_output_path(path: Path, used_paths: set[Path]) -> Path:
         index += 1
 
 
+def analysis_prompt_for_result(result: dict[str, Any]) -> str:
+    return (
+        result.get("ai_analysis_prompt")
+        or result.get("xpp_analysis", {}).get("ai_analysis_prompt")
+        or "Analyze this project document JSON. Focus on requirements, technical objects, algorithms, dependencies, risks, and code matches."
+    )
+
+
 def write_analysis_result(
     source_path: Path,
     output_path: Path,
@@ -67,13 +75,13 @@ def write_analysis_result(
 ) -> None:
     source = source_path.read_text(encoding="utf-8", errors="ignore")
     source = normalize_xpo_source(source)
-    result = analyze_source(source, include_source=include_source)
+    result = analyze_source(source, include_source=include_source, source_file=str(source_path))
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
 
     if ai_prompt_path:
         prompt = (
-            f"{result['ai_analysis_prompt']}\n\n"
+            f"{analysis_prompt_for_result(result)}\n\n"
             "```json\n"
             f"{json.dumps(result, ensure_ascii=False, indent=2)}\n"
             "```\n"
@@ -86,14 +94,14 @@ def analyze_single_file(args: argparse.Namespace) -> None:
     output_path = args.output
     if output_path is None:
         source = args.input.read_text(encoding="utf-8", errors="ignore")
-        result = analyze_source(normalize_xpo_source(source), include_source=not args.no_source)
+        result = analyze_source(normalize_xpo_source(source), include_source=not args.no_source, source_file=str(args.input))
         output_path = output_path_for_result(result)
         output_path.parent.mkdir(parents=True, exist_ok=True)
         output_path.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
 
         if args.ai_prompt:
             prompt = (
-                f"{result['ai_analysis_prompt']}\n\n"
+                f"{analysis_prompt_for_result(result)}\n\n"
                 "```json\n"
                 f"{json.dumps(result, ensure_ascii=False, indent=2)}\n"
                 "```\n"
@@ -121,7 +129,7 @@ def analyze_directory(args: argparse.Namespace) -> None:
     used_paths: set[Path] = set()
     for source_path in input_files:
         source = source_path.read_text(encoding="utf-8", errors="ignore")
-        result = analyze_source(normalize_xpo_source(source), include_source=not args.no_source)
+        result = analyze_source(normalize_xpo_source(source), include_source=not args.no_source, source_file=str(source_path))
         output_path = unique_output_path(result_output_path_for_input(result, source_path, output_dir), used_paths)
         output_path.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
 

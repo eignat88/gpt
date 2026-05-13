@@ -11,6 +11,8 @@ import re
 from dataclasses import asdict, dataclass, field
 from typing import Any, Iterable
 
+from .models import BusinessRequirement, CodeMatch, DocumentAnalysisResult, ProjectInfo, TechnicalObjects
+
 METHOD_HEADER_RE = re.compile(
     r"(?m)^\s*(?!(?:if|while|for|switch|catch|using|else)\b)"
     r"[^\n;{}=]*?\b(?P<name>[A-Za-z_]\w*)\s*\([^;{}]*\)\s*\{"
@@ -661,7 +663,7 @@ def build_call_tree(method_name: str, graph: dict[str, list[str]], stack: tuple[
     }
 
 
-def analyze_source(source: str, include_source: bool = True) -> dict[str, Any]:
+def analyze_xpp_source(source: str, include_source: bool = True) -> dict[str, Any]:
     class_info = extract_class_info(source)
     methods = extract_methods(source)
     method_names = {method.name.lower(): method.name for method in methods}
@@ -680,6 +682,7 @@ def analyze_source(source: str, include_source: bool = True) -> dict[str, Any]:
     roots = [method.name for method in methods if method.name not in called] or [method.name for method in methods]
 
     return {
+        "document_type": "class_xpp",
         "class_info": class_info,
         "summary": {
             "method_count": len(methods),
@@ -712,3 +715,182 @@ def analyze_source(source: str, include_source: bool = True) -> dict[str, Any]:
             "nested while select patterns, update/insert/delete risks, and risky method-call chains."
         ),
     }
+
+
+PROJECT_DOCUMENT_KEYWORDS = (
+    "project",
+    "requirement",
+    "business",
+    "algorithm",
+    "dependency",
+    "risk",
+    "technical object",
+    "проект",
+    "требован",
+    "бизнес",
+    "алгоритм",
+    "зависим",
+    "риск",
+    "техническ",
+)
+PROJECT_FIELD_PATTERNS = {
+    "name": re.compile(r"(?im)^\s*(?:project|проект|name|название)\s*[:=-]\s*(?P<value>.+?)\s*$"),
+    "module": re.compile(r"(?im)^\s*(?:module|модуль)\s*[:=-]\s*(?P<value>.+?)\s*$"),
+    "owner": re.compile(r"(?im)^\s*(?:owner|responsible|владелец|ответственный)\s*[:=-]\s*(?P<value>.+?)\s*$"),
+}
+SECTION_ALIASES = {
+    "business_requirements": ("business requirements", "requirements", "бизнес-требования", "бизнес требования", "требования"),
+    "algorithms": ("algorithms", "algorithm", "алгоритмы", "алгоритм"),
+    "dependencies": ("dependencies", "dependency", "зависимости", "зависимость"),
+    "risks": ("risks", "risk", "риски", "риск"),
+    "technical_objects": ("technical objects", "objects", "технические объекты", "объекты"),
+}
+BULLET_RE = re.compile(r"^\s*(?:[-*•]|\d+[.)])\s*(?P<text>.+?)\s*$")
+HEADING_RE = re.compile(r"^\s{0,3}#{1,6}\s*(?P<title>.+?)\s*$")
+INLINE_OBJECT_RE = re.compile(
+    r"\b(?P<kind>class|table|form|enum|entity|field|класс|таблица|форма|перечисление|сущность|поле)\s*[:=-]?\s*`?(?P<name>[A-Za-z_][\w.]*)`?",
+    re.IGNORECASE,
+)
+
+
+def has_xpp_source(source: str) -> bool:
+    return bool(SOURCE_METHOD_RE.search(source) or re.search(r"(?im)^\s*#?class\s+[A-Za-z_]\w*\b", source))
+
+
+def has_project_document_markers(source: str) -> bool:
+    normalized = source.lower()
+    return any(keyword in normalized for keyword in PROJECT_DOCUMENT_KEYWORDS)
+
+
+def document_kind(source: str) -> str:
+    xpp = has_xpp_source(source)
+    project = has_project_document_markers(source)
+    if xpp and project:
+        return "mixed_document"
+    if project:
+        return "project_document"
+    return "class_xpp"
+
+
+def clean_doc_text(text: str) -> str:
+    return text.strip().strip("`*_ .,:;…")
+
+
+def section_for_heading(title: str) -> str | None:
+    normalized = clean_doc_text(title).lower().rstrip(":")
+    for section, aliases in SECTION_ALIASES.items():
+        if any(alias in normalized for alias in aliases):
+            return section
+    return None
+
+
+def first_sentence(source: str) -> str | None:
+    for line in source.splitlines():
+        stripped = clean_doc_text(line)
+        if stripped and not stripped.startswith("#") and not BULLET_RE.match(stripped):
+            return stripped
+    return None
+
+
+def add_unique(values: list[str], value: str) -> None:
+    value = clean_doc_text(value)
+    if value and value not in values:
+        values.append(value)
+
+
+def collect_inline_objects(text: str, technical_objects: TechnicalObjects, matches: list[CodeMatch]) -> None:
+    kind_to_field = {
+        "class": "classes",
+        "класс": "classes",
+        "table": "tables",
+        "таблица": "tables",
+        "form": "forms",
+        "форма": "forms",
+        "enum": "enums",
+        "перечисление": "enums",
+        "entity": "entities",
+        "сущность": "entities",
+        "field": "fields",
+        "поле": "fields",
+    }
+    for match in INLINE_OBJECT_RE.finditer(text):
+        object_type = kind_to_field[match.group("kind").lower()]
+        object_name = match.group("name")
+        add_unique(getattr(technical_objects, object_type), object_name)
+        code_match = CodeMatch(
+            object_name=object_name,
+            object_type=object_type[:-1],
+            match_type="mentioned_in_document",
+            confidence="medium",
+        )
+        if code_match not in matches:
+            matches.append(code_match)
+
+
+def parse_requirement(text: str, line_number_: int) -> BusinessRequirement:
+    match = re.match(r"(?i)^\s*(?:(?P<id>(?:BR|REQ|FR|NFR)[-\w]*)\s*[:\-–])?\s*(?P<text>.+?)\s*$", text)
+    if not match:
+        return BusinessRequirement(id=None, text=clean_doc_text(text), source_line=line_number_)
+    return BusinessRequirement(id=match.group("id"), text=clean_doc_text(match.group("text")), source_line=line_number_)
+
+
+def analyze_project_document(source: str, *, document_type: str, source_file: str | None = None) -> DocumentAnalysisResult:
+    project = ProjectInfo(summary=first_sentence(source))
+    for field_name, pattern in PROJECT_FIELD_PATTERNS.items():
+        match = pattern.search(source)
+        if match:
+            setattr(project, field_name, clean_doc_text(match.group("value")))
+
+    result = DocumentAnalysisResult(document_type=document_type, source_file=source_file, project=project)
+    current_section: str | None = None
+
+    for line_number_, line in enumerate(source.splitlines(), start=1):
+        heading = HEADING_RE.match(line)
+        if heading:
+            heading_title = heading.group("title")
+            current_section = section_for_heading(heading_title)
+            project_heading = re.match(r"(?i)^\s*(?:project|проект)\s*[:=-]\s*(?P<value>.+?)\s*$", heading_title)
+            if project_heading:
+                project.name = clean_doc_text(project_heading.group("value"))
+            continue
+
+        collect_inline_objects(line, result.technical_objects, result.matches_with_code)
+        bullet = BULLET_RE.match(line)
+        if not bullet:
+            continue
+        text = clean_doc_text(bullet.group("text"))
+        if not text:
+            continue
+
+        inferred_section = current_section or section_for_heading(text)
+        if inferred_section == "business_requirements":
+            result.business_requirements.append(parse_requirement(text, line_number_))
+        elif inferred_section == "algorithms":
+            result.algorithms.append(text)
+        elif inferred_section == "dependencies":
+            result.dependencies.append(text)
+        elif inferred_section == "risks":
+            result.risks.append(text)
+        elif inferred_section == "technical_objects":
+            collect_inline_objects(text, result.technical_objects, result.matches_with_code)
+
+    return result
+
+
+def document_analysis_to_dict(result: DocumentAnalysisResult) -> dict[str, Any]:
+    data = asdict(result)
+    if data.get("xpp_analysis") is None:
+        data.pop("xpp_analysis")
+    return data
+
+
+def analyze_source(source: str, include_source: bool = True, source_file: str | None = None) -> dict[str, Any]:
+    """Analyze X++ source, project documentation, or a mixed document."""
+    kind = document_kind(source)
+    if kind == "class_xpp":
+        return analyze_xpp_source(source, include_source=include_source)
+
+    project_result = analyze_project_document(source, document_type=kind, source_file=source_file)
+    if kind == "mixed_document":
+        project_result.xpp_analysis = analyze_xpp_source(source, include_source=include_source)
+    return document_analysis_to_dict(project_result)
