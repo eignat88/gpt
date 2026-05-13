@@ -1,7 +1,9 @@
 import unittest
 from pathlib import Path
 
-from xpp_analyzer import analyze_source, normalize_xpo_source, output_path_for_result
+from xpp_analyzer import analyze_source
+from xpp_analyzer.cli import output_path_for_result
+from xpp_analyzer.xpo import normalize_xpo_source
 
 
 XPO_SAMPLE = """
