@@ -4,27 +4,10 @@ from __future__ import annotations
 
 import re
 
+from .constants import *
 from .models import MethodParameter, MethodSignature, MethodSource
 from .utils import line_number, mask_comments_and_strings, section_end_offset
 from .xpo import remove_signature_preprocessor_source
-
-METHOD_HEADER_RE = re.compile(
-    r"(?m)^\s*(?!(?:if|while|for|switch|catch|using|else)\b)"
-    r"[^\n;{}=]*?\b(?P<name>[A-Za-z_]\w*)\s*\([^;{}]*\)\s*\{"
-)
-SOURCE_METHOD_RE = re.compile(r"(?m)^\s*SOURCE\s+#(?P<name>[A-Za-z_]\w*)\s*$")
-ENDSOURCE_RE = re.compile(r"(?m)^\s*ENDSOURCE\s*$")
-METHOD_SIGNATURE_RE = re.compile(
-    r"^\s*"
-    r"(?P<modifiers>(?:public|private|protected)(?:\s+static)?|static|client|server|display|edit)"
-    r"(?:\s+(?P<qualifier>client|server|display|edit))*"
-    r"\s+(?P<return_type>[A-Za-z_]\w*)"
-    r"\s+(?P<name>[A-Za-z_]\w*)"
-    r"\s*\((?P<parameters>[^;{}]*)\)\s*\{",
-    re.IGNORECASE | re.MULTILINE,
-)
-ACCESS_MODIFIERS = {"public", "private", "protected"}
-SIGNATURE_MODIFIERS = ACCESS_MODIFIERS | {"static"}
 
 
 def split_parameters(parameters: str) -> list[str]:
