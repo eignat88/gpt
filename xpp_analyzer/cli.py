@@ -7,8 +7,7 @@ import json
 from pathlib import Path
 from typing import Any
 
-from xpp_analyzer import analyze_source, normalize_xpo_source, output_path_for_result, safe_filename
-from xpp_analyzer.linker import build_code_index, link_project_to_code
+from xpp_analyzer import analyze_source, normalize_xpo_source, output_path_for_result, safe_filename, build_code_index, link_project_to_code
 
 DEFAULT_BATCH_INPUT_PATTERN = "*.txt"
 
@@ -35,10 +34,6 @@ def txt_files_in_directory(input_dir: Path) -> list[Path]:
 
 def result_output_path_for_input(result: dict[str, Any], source_path: Path, output_dir: Path) -> Path:
     """Build a batch output path, falling back to the input file stem when a class name is absent."""
-    if not isinstance(result.get("class_info"), dict):
-        source_stem = safe_filename(source_path.stem) or "xpp-analysis"
-        return output_dir / f"{source_stem}.json"
-
     candidate = output_path_for_result(result)
     if candidate.name == "xpp-analysis.json":
         source_stem = safe_filename(source_path.stem) or "xpp-analysis"
@@ -47,7 +42,7 @@ def result_output_path_for_input(result: dict[str, Any], source_path: Path, outp
 
 
 def analyze_or_load_batch_result(source_path: Path, *, include_source: bool) -> dict[str, Any]:
-    """Analyze an X++ source file or load an existing project/mixed JSON result."""
+    """Analyze a source file or load an existing project/mixed JSON result."""
     source = source_path.read_text(encoding="utf-8", errors="ignore")
     try:
         loaded_result = json.loads(source)
@@ -61,7 +56,7 @@ def analyze_or_load_batch_result(source_path: Path, *, include_source: bool) -> 
     ):
         return loaded_result
 
-    return analyze_source(normalize_xpo_source(source), include_source=include_source)
+    return analyze_source(normalize_xpo_source(source), include_source=include_source, source_file=str(source_path))
 
 
 def unique_output_path(path: Path, used_paths: set[Path]) -> Path:
@@ -81,6 +76,14 @@ def unique_output_path(path: Path, used_paths: set[Path]) -> Path:
         index += 1
 
 
+def analysis_prompt_for_result(result: dict[str, Any]) -> str:
+    return (
+        result.get("ai_analysis_prompt")
+        or result.get("xpp_analysis", {}).get("ai_analysis_prompt")
+        or "Analyze this project document JSON. Focus on requirements, technical objects, algorithms, dependencies, risks, and code matches."
+    )
+
+
 def write_analysis_result(
     source_path: Path,
     output_path: Path,
@@ -90,13 +93,13 @@ def write_analysis_result(
 ) -> None:
     source = source_path.read_text(encoding="utf-8", errors="ignore")
     source = normalize_xpo_source(source)
-    result = analyze_source(source, include_source=include_source)
+    result = analyze_source(source, include_source=include_source, source_file=str(source_path))
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
 
     if ai_prompt_path:
         prompt = (
-            f"{result['ai_analysis_prompt']}\n\n"
+            f"{analysis_prompt_for_result(result)}\n\n"
             "```json\n"
             f"{json.dumps(result, ensure_ascii=False, indent=2)}\n"
             "```\n"
@@ -109,14 +112,14 @@ def analyze_single_file(args: argparse.Namespace) -> None:
     output_path = args.output
     if output_path is None:
         source = args.input.read_text(encoding="utf-8", errors="ignore")
-        result = analyze_source(normalize_xpo_source(source), include_source=not args.no_source)
+        result = analyze_source(normalize_xpo_source(source), include_source=not args.no_source, source_file=str(args.input))
         output_path = output_path_for_result(result)
         output_path.parent.mkdir(parents=True, exist_ok=True)
         output_path.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
 
         if args.ai_prompt:
             prompt = (
-                f"{result['ai_analysis_prompt']}\n\n"
+                f"{analysis_prompt_for_result(result)}\n\n"
                 "```json\n"
                 f"{json.dumps(result, ensure_ascii=False, indent=2)}\n"
                 "```\n"
@@ -156,6 +159,7 @@ def analyze_directory(args: argparse.Namespace) -> None:
             or result.get("type") in {"project", "mixed"}
         ):
             result = link_project_to_code(result, code_index)
+
         output_path = unique_output_path(result_output_path_for_input(result, source_path, output_dir), used_paths)
         output_path.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
 
