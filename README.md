@@ -6,6 +6,8 @@
 
 ```bash
 python xpp_analyzer.py path/to/MyClass.xpp -o analysis.json --ai-prompt ai-review.md
+# or, as a package module:
+python -m xpp_analyzer.cli path/to/MyClass.xpp -o analysis.json --ai-prompt ai-review.md
 ```
 
 Options:
