@@ -1,5 +1,6 @@
 """Public API for the X++ analyzer."""
 
+from xpp_analyzer.document_classifier import classify_document
 from xpp_analyzer.analyzer import (
     CALL_RE,
     CONTROL_FLOW_KEYWORDS,
@@ -89,6 +90,7 @@ __all__ = [
     "analyze_source",
     "analyze_project_description",
     "build_call_tree",
+    "classify_document",
     "extract_class_info",
     "extract_methods",
     "extract_properties",
