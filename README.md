@@ -50,6 +50,10 @@ Example method-level table and field data:
 
 Local methods and standard functions should not be included in `"fields"`.
 
+## Python API
+
+`analyze_model(source)` returns a typed `AnalysisResult` for tests and programmatic consumers that do not need the JSON serialization layer. The compatible `analyze_source(source, include_source=True)` facade still returns the existing JSON-ready dictionary.
+
 ## Development check
 
 ```bash

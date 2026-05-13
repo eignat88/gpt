@@ -1,16 +1,26 @@
-"""Analyze parsed X++ methods for operations, calls, tables, and fields."""
+#!/usr/bin/env python3
+"""Analyze X++ class methods and build a JSON call/operation tree.
+
+The analyzer is intentionally dependency-free so it can be used in CI jobs,
+local export pipelines, or before sending a compact summary to an AI reviewer.
+"""
 
 from __future__ import annotations
 
 import re
-from dataclasses import asdict
-from typing import Any
+from pathlib import Path
+from typing import Any, Iterable
 
-from .models import MethodSource, MethodVariable, Operation
-from .parser import METHOD_HEADER_RE, extract_methods
-from .utils import line_number, unique_preserve_order
-from .xpo import extract_class_info
+from .models import AnalysisResult, MethodParameter, MethodSignature, MethodSource, MethodVariable, Operation
 
+METHOD_HEADER_RE = re.compile(
+    r"(?m)^\s*(?!(?:if|while|for|switch|catch|using|else)\b)"
+    r"[^\n;{}=]*?\b(?P<name>[A-Za-z_]\w*)\s*\([^;{}]*\)\s*\{"
+)
+SOURCE_METHOD_RE = re.compile(r"(?m)^\s*SOURCE\s+#(?P<name>[A-Za-z_]\w*)\s*$")
+ENDSOURCE_RE = re.compile(r"(?m)^\s*ENDSOURCE\s*$")
+PREPROCESSOR_LINE_RE = re.compile(r"(?m)^[^\S\n]*#.*(?:\n|$)")
+LOCALMACRO_BLOCK_RE = re.compile(r"(?im)^\s*#localmacro\b[\s\S]*?^\s*#endmacro[^\n]*(?:\n|$)")
 OPERATION_PATTERNS = {
     "while_select": re.compile(r"\bwhile\s+select\b", re.IGNORECASE),
     "select": re.compile(r"\bselect\b", re.IGNORECASE),
@@ -21,6 +31,7 @@ OPERATION_PATTERNS = {
 }
 CALL_RE = re.compile(r"\b([A-Za-z_]\w*)\s*\(")
 FIELD_ACCESS_RE = re.compile(r"\b(?P<buffer>[A-Za-z_]\w*)\s*\.\s*(?P<field>[A-Za-z_]\w*)\b")
+INVALID_FILENAME_CHARS_RE = re.compile(r'[<>:"/\\|?*\x00-\x1f]+')
 IGNORED_CALL_NAMES = {
     "if",
     "while",
@@ -111,6 +122,297 @@ SELECT_OPTION_KEYWORDS = {
 FIELD_METHOD_NAMES = {"clear", "delete", "doupdate", "insert", "reread", "update", "validatewrite"}
 
 
+def normalize_xpo_source(text: str) -> str:
+    """Remove leading XPO export markers from source lines."""
+    lines = []
+    for line in text.splitlines():
+        stripped = line.lstrip()
+        if stripped.startswith("#"):
+            lines.append(stripped[1:])
+        else:
+            lines.append(line)
+    return "\n".join(lines)
+
+
+def strip_xpo_value(value: str) -> str:
+    value = value.strip()
+    if value.startswith("#"):
+        value = value[1:].strip()
+    if value.startswith("{") and value.endswith("}"):
+        value = value[1:-1].strip()
+    return value
+
+
+def extract_properties(source: str) -> dict[str, str]:
+    properties: dict[str, str] = {}
+    match = re.search(r"(?ims)^\s*#?PROPERTIES\s*$(?P<body>.*?)^\s*#?ENDPROPERTIES\s*$", source)
+    if not match:
+        return properties
+
+    for line in match.group("body").splitlines():
+        line = line.strip()
+        if not line or line.startswith(";"):
+            continue
+
+        property_match = re.match(r"#?\s*(?P<key>[A-Za-z_]\w*)\s+(?P<value>.+?)\s*$", line)
+        if property_match:
+            properties[property_match.group("key").lower()] = strip_xpo_value(property_match.group("value"))
+
+    return properties
+
+
+def extract_class_info(source: str) -> dict[str, Any]:
+    """Extract class metadata from regular or XPO-prefixed X++ source."""
+    normalized_source = normalize_xpo_source(source)
+    searchable_source = f"{source}\n{normalized_source}"
+    properties = extract_properties(searchable_source)
+
+    extends_match = re.search(
+        r"(?im)^\s*#?class\s+(?P<name>[A-Za-z_]\w*)(?:\s+extends\s+(?P<extends>[A-Za-z_]\w*))?\b",
+        searchable_source,
+    )
+    version_match = re.search(
+        r"(?im)#*define\s*\.\s*CurrentVersion\s*\(\s*(?P<version>\d+)\s*\)",
+        searchable_source,
+    )
+
+    current_version = int(version_match.group("version")) if version_match else None
+
+    return {
+        "name": (
+            properties.get("name")
+            or properties.get("classname")
+            or (extends_match.group("name") if extends_match else None)
+        ),
+        "extends": extends_match.group("extends") if extends_match else None,
+        "origin": properties.get("origin"),
+        "current_version": current_version,
+    }
+
+
+def mask_comments_and_strings(source: str) -> str:
+    """Replace comments and strings with spaces while preserving offsets/newlines."""
+    result: list[str] = []
+    i = 0
+    state = "code"
+    while i < len(source):
+        ch = source[i]
+        nxt = source[i + 1] if i + 1 < len(source) else ""
+
+        if state == "code":
+            if ch == "/" and nxt == "/":
+                result.extend("  ")
+                i += 2
+                state = "line_comment"
+            elif ch == "/" and nxt == "*":
+                result.extend("  ")
+                i += 2
+                state = "block_comment"
+            elif ch in {'"', "'"}:
+                result.append(" ")
+                quote = ch
+                i += 1
+                state = f"string:{quote}"
+            else:
+                result.append(ch)
+                i += 1
+        elif state == "line_comment":
+            if ch == "\n":
+                result.append("\n")
+                state = "code"
+            else:
+                result.append(" ")
+            i += 1
+        elif state == "block_comment":
+            if ch == "*" and nxt == "/":
+                result.extend("  ")
+                i += 2
+                state = "code"
+            else:
+                result.append("\n" if ch == "\n" else " ")
+                i += 1
+        else:
+            quote = state.split(":", 1)[1]
+            if ch == "\\" and nxt:
+                result.extend("  ")
+                i += 2
+            elif ch == quote:
+                result.append(" ")
+                i += 1
+                state = "code"
+            else:
+                result.append("\n" if ch == "\n" else " ")
+                i += 1
+    return "".join(result)
+
+
+def line_number(source: str, offset: int) -> int:
+    return source.count("\n", 0, offset) + 1
+
+
+def matching_brace(source: str, opening_brace: int) -> int:
+    depth = 0
+    for index in range(opening_brace, len(source)):
+        if source[index] == "{":
+            depth += 1
+        elif source[index] == "}":
+            depth -= 1
+            if depth == 0:
+                return index
+    raise ValueError(f"No matching closing brace found for offset {opening_brace}")
+
+
+def section_end_offset(source: str, endsource_end: int) -> int:
+    """Return an offset that includes the whole ENDSOURCE line."""
+    if endsource_end < len(source) and source[endsource_end] == "\r":
+        endsource_end += 1
+    if endsource_end < len(source) and source[endsource_end] == "\n":
+        endsource_end += 1
+    return endsource_end
+
+
+
+METHOD_SIGNATURE_RE = re.compile(
+    r"^\s*"
+    r"(?P<modifiers>(?:public|private|protected)(?:\s+static)?|static|client|server|display|edit)"
+    r"(?:\s+(?P<qualifier>client|server|display|edit))*"
+    r"\s+(?P<return_type>[A-Za-z_]\w*)"
+    r"\s+(?P<name>[A-Za-z_]\w*)"
+    r"\s*\((?P<parameters>[^;{}]*)\)\s*\{",
+    re.IGNORECASE | re.MULTILINE,
+)
+ACCESS_MODIFIERS = {"public", "private", "protected"}
+SIGNATURE_MODIFIERS = ACCESS_MODIFIERS | {"static"}
+
+
+def split_parameters(parameters: str) -> list[str]:
+    """Split parameter text by commas while preserving simple quoted defaults."""
+    result: list[str] = []
+    start = 0
+    quote: str | None = None
+    depth = 0
+    index = 0
+    while index < len(parameters):
+        char = parameters[index]
+        if quote:
+            if char == "\\" and index + 1 < len(parameters):
+                index += 2
+                continue
+            if char == quote:
+                quote = None
+        elif char in {'"', "'"}:
+            quote = char
+        elif char in "([":
+            depth += 1
+        elif char in ")]" and depth > 0:
+            depth -= 1
+        elif char == "," and depth == 0:
+            result.append(parameters[start:index].strip())
+            start = index + 1
+        index += 1
+
+    tail = parameters[start:].strip()
+    if tail:
+        result.append(tail)
+    return result
+
+
+def split_default(parameter: str) -> tuple[str, str | None]:
+    quote: str | None = None
+    depth = 0
+    index = 0
+    while index < len(parameter):
+        char = parameter[index]
+        if quote:
+            if char == "\\" and index + 1 < len(parameter):
+                index += 2
+                continue
+            if char == quote:
+                quote = None
+        elif char in {'"', "'"}:
+            quote = char
+        elif char in "([":
+            depth += 1
+        elif char in ")]" and depth > 0:
+            depth -= 1
+        elif char == "=" and depth == 0:
+            return parameter[:index].strip(), parameter[index + 1 :].strip() or None
+        index += 1
+    return parameter.strip(), None
+
+
+def parse_parameter(parameter: str) -> MethodParameter:
+    declaration, default = split_default(parameter)
+    parts = declaration.split()
+    if not parts:
+        return MethodParameter(name="", type=None, default=default)
+    if len(parts) == 1:
+        return MethodParameter(name=parts[0], type=None, default=default)
+    return MethodParameter(name=parts[-1], type=" ".join(parts[:-1]), default=default)
+
+
+def remove_signature_preprocessor_source(source: str) -> str:
+    """Remove X++ preprocessor-only lines and localmacro blocks before signature parsing."""
+    source = LOCALMACRO_BLOCK_RE.sub("", source)
+    return PREPROCESSOR_LINE_RE.sub("", source)
+
+
+def preprocess_signature_source(method_source: str) -> str:
+    """Prepare a SOURCE section for method-signature regex parsing."""
+    source_body = SOURCE_METHOD_RE.sub("", method_source, count=1)
+    source_body = source_body.replace("\r\n", "\n").replace("\r", "\n")
+    source_body = mask_comments_and_strings(source_body)
+    return remove_signature_preprocessor_source(source_body)
+
+
+def parse_method_signature(method_source: str, fallback_name: str) -> MethodSignature:
+    """Parse the first X++ method declaration inside a SOURCE section."""
+    source_body = preprocess_signature_source(method_source)
+    match = METHOD_SIGNATURE_RE.search(source_body)
+    if not match:
+        return MethodSignature(access=None, static=False, return_type=None, name=fallback_name, parameters=[])
+
+    name = match.group("name") or fallback_name
+    modifier_tokens = match.group("modifiers").split()
+    access = next((token.lower() for token in modifier_tokens if token.lower() in ACCESS_MODIFIERS), None)
+    static = any(token.lower() == "static" for token in modifier_tokens)
+    return_type = match.group("return_type")
+
+    unmasked_source_body = SOURCE_METHOD_RE.sub("", method_source, count=1)
+    unmasked_source_body = unmasked_source_body.replace("\r\n", "\n").replace("\r", "\n")
+    unmasked_source_body = remove_signature_preprocessor_source(unmasked_source_body)
+    parameters_text = unmasked_source_body[match.start("parameters") : match.end("parameters")]
+    parameters = [parse_parameter(parameter) for parameter in split_parameters(parameters_text.strip())]
+    return MethodSignature(access=access, static=static, return_type=return_type, name=name, parameters=parameters)
+
+
+def extract_methods(source: str) -> list[MethodSource]:
+    methods: list[MethodSource] = []
+    for start_match in SOURCE_METHOD_RE.finditer(source):
+        end_match = ENDSOURCE_RE.search(source, start_match.end())
+        if not end_match:
+            continue
+
+        start = start_match.start()
+        end = section_end_offset(source, end_match.end())
+        method_source = source[start:end]
+        fallback_name = start_match.group("name")
+        signature = parse_method_signature(method_source, fallback_name)
+        methods.append(
+            MethodSource(
+                name=signature.name if signature else fallback_name,
+                start=start,
+                end=end,
+                start_line=line_number(source, start),
+                end_line=line_number(source, end_match.start()),
+                source=method_source,
+                clean_source=mask_comments_and_strings(method_source),
+                signature=signature,
+            )
+        )
+    return methods
+
+
 def snippet_for(source: str, local_offset: int) -> str:
     line_start = source.rfind("\n", 0, local_offset) + 1
     line_end = source.find("\n", local_offset)
@@ -138,6 +440,17 @@ def find_operations(method: MethodSource) -> list[Operation]:
                 )
             )
     return sorted(operations, key=lambda item: (item.line, item.type))
+
+
+def unique_preserve_order(items: Iterable[str]) -> list[str]:
+    seen: set[str] = set()
+    result: list[str] = []
+    for item in items:
+        key = item.lower()
+        if key not in seen:
+            seen.add(key)
+            result.append(item)
+    return result
 
 
 def method_body_start(method: MethodSource) -> int | None:
@@ -303,7 +616,7 @@ def build_call_tree(method_name: str, graph: dict[str, list[str]], stack: tuple[
     }
 
 
-def analyze_source(source: str, include_source: bool = True) -> dict[str, Any]:
+def analyze_model(source: str) -> AnalysisResult:
     class_info = extract_class_info(source)
     methods = extract_methods(source)
     method_names = {method.name.lower(): method.name for method in methods}
@@ -320,37 +633,43 @@ def analyze_source(source: str, include_source: bool = True) -> dict[str, Any]:
     graph = {method.name: method.internal_calls for method in methods}
     called = {child for children in graph.values() for child in children}
     roots = [method.name for method in methods if method.name not in called] or [method.name for method in methods]
-
-    return {
-        "class_info": class_info,
-        "summary": {
-            "method_count": len(methods),
-            "operation_counts": {
-                operation_type: sum(1 for method in methods for op in method.operations if op.type == operation_type)
-                for operation_type in OPERATION_PATTERNS
-            },
+    summary = {
+        "method_count": len(methods),
+        "operation_counts": {
+            operation_type: sum(1 for method in methods for op in method.operations if op.type == operation_type)
+            for operation_type in OPERATION_PATTERNS
         },
-        "methods": [
-            {
-                "name": method.name,
-                "start_line": method.start_line,
-                "end_line": method.end_line,
-                "source": method.source if include_source else None,
-                "signature": asdict(method.signature) if method.signature else None,
-                "variables": [variable.__dict__ for variable in method.variables],
-                "tables": method.tables,
-                "fields": method.fields,
-                "operations": [op.__dict__ for op in method.operations],
-                "calls": method.calls,
-                "internal_calls": method.internal_calls,
-                "external_calls": method.external_calls,
-            }
-            for method in methods
-        ],
-        "call_graph": graph,
-        "call_tree": [build_call_tree(root, graph) for root in roots],
-        "ai_analysis_prompt": (
-            "Analyze this X++ class JSON. Focus on DB reads/writes, ttsBegin transaction boundaries, "
-            "nested while select patterns, update/insert/delete risks, and risky method-call chains."
-        ),
     }
+
+    return AnalysisResult(
+        class_info=class_info,
+        methods=methods,
+        call_graph=graph,
+        call_tree=[build_call_tree(root, graph) for root in roots],
+        summary=summary,
+    )
+
+
+def analyze_source(source: str, include_source: bool = True) -> dict[str, Any]:
+    """Analyze X++ source and return the legacy dictionary representation."""
+    from .serialization import analysis_to_dict
+
+    return analysis_to_dict(analyze_model(source), include_source=include_source)
+
+
+def safe_filename(name: str) -> str:
+    """Return a filesystem-safe filename stem derived from a class name."""
+    return INVALID_FILENAME_CHARS_RE.sub("_", name).strip(" .")
+
+
+def output_path_for_result(result: dict[str, Any], explicit_output: Path | None = None) -> Path:
+    if explicit_output is not None:
+        return explicit_output
+
+    class_name = result["class_info"]["name"]
+    if class_name:
+        filename = safe_filename(class_name)
+        if filename:
+            return Path(f"{filename}.json")
+
+    return Path("xpp-analysis.json")

@@ -1,8 +1,9 @@
-"""Data models for X++ source analysis."""
+"""Typed models returned by the X++ analyzer."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from typing import Any
 
 
 @dataclass
@@ -51,3 +52,12 @@ class MethodSource:
     calls: list[str] = field(default_factory=list)
     internal_calls: list[str] = field(default_factory=list)
     external_calls: list[str] = field(default_factory=list)
+
+
+@dataclass
+class AnalysisResult:
+    class_info: dict[str, Any]
+    methods: list[MethodSource]
+    call_graph: dict[str, list[str]]
+    call_tree: list[dict[str, Any]]
+    summary: dict[str, Any]

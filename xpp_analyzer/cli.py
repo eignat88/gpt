@@ -6,9 +6,8 @@ import argparse
 import json
 from pathlib import Path
 
-from .analysis import analyze_source
-from .output import output_path_for_result
-from .xpo import normalize_xpo_source
+from .analysis import analyze_model, normalize_xpo_source, output_path_for_result
+from .serialization import analysis_to_dict
 
 
 def parse_args() -> argparse.Namespace:
@@ -24,7 +23,7 @@ def main() -> None:
     args = parse_args()
     source = args.input.read_text(encoding="utf-8", errors="ignore")
     source = normalize_xpo_source(source)
-    result = analyze_source(source, include_source=not args.no_source)
+    result = analysis_to_dict(analyze_model(source), include_source=not args.no_source)
     output_path = output_path_for_result(result, args.output)
     output_path.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
 
