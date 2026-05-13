@@ -1,5 +1,6 @@
 """Public API for the X++ analyzer."""
 
+from .constants import *
 from xpp_analyzer.analyzer import (
     CALL_RE,
     CONTROL_FLOW_KEYWORDS,
