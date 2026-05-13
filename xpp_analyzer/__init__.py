@@ -54,6 +54,7 @@ from xpp_analyzer.analyzer import (
 )
 from xpp_analyzer.output import output_path_for_result, safe_filename
 from xpp_analyzer.project_parser import analyze_project_description
+from xpp_analyzer.linker import build_code_index, link_project_to_code
 
 
 def parse_args():
@@ -90,6 +91,7 @@ __all__ = [
     "analyze_source",
     "analyze_project_description",
     "build_call_tree",
+    "build_code_index",
     "classify_document",
     "extract_class_info",
     "extract_methods",
@@ -102,6 +104,7 @@ __all__ = [
     "main",
     "is_table_type",
     "line_number",
+    "link_project_to_code",
     "mask_comments_and_strings",
     "matching_brace",
     "method_body_start",
