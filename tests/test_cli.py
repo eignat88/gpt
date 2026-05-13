@@ -66,6 +66,47 @@ ENDSOURCE
 
             self.assertTrue((input_dir / "no class.json").exists())
 
+    def test_directory_input_enriches_project_results_after_code_index_is_built(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            input_dir = Path(tmp) / "input"
+            output_dir = Path(tmp) / "output"
+            input_dir.mkdir()
+            (input_dir / "code.txt").write_text(
+                """
+class InventUpd_Reservation
+{
+}
+SOURCE #updateReserveMore
+public void updateReserveMore()
+{
+    InventTrans inventTrans;
+
+    inventTrans.StatusIssue = StatusIssue::ReservPhysical;
+}
+ENDSOURCE
+""",
+                encoding="utf-8",
+            )
+            (input_dir / "project.txt").write_text(
+                json.dumps(
+                    {
+                        "result_type": "project",
+                        "technical_objects": {"classes": ["InventUpd_Reservation"]},
+                        "description": "Доработка InventTrans в методе updateReserveMore по полю StatusIssue.",
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+
+            main([str(input_dir), "-o", str(output_dir), "--no-source"])
+
+            project = json.loads((output_dir / "project.json").read_text(encoding="utf-8"))
+            self.assertEqual(project["matches_with_code"]["classes"][0]["name"], "InventUpd_Reservation")
+            self.assertEqual(project["matches_with_code"]["tables"][0]["name"], "InventTrans")
+            self.assertEqual(project["matches_with_code"]["fields"][0]["name"], "StatusIssue")
+            self.assertEqual(project["matches_with_code"]["methods"][0]["name"], "updateReserveMore")
+
 
 if __name__ == "__main__":
     unittest.main()

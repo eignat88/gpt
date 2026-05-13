@@ -680,6 +680,7 @@ def analyze_source(source: str, include_source: bool = True) -> dict[str, Any]:
     roots = [method.name for method in methods if method.name not in called] or [method.name for method in methods]
 
     return {
+        "result_type": "class_xpp",
         "class_info": class_info,
         "summary": {
             "method_count": len(methods),
