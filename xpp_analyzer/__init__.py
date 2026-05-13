@@ -52,6 +52,7 @@ from xpp_analyzer.analyzer import (
     unique_preserve_order,
 )
 from xpp_analyzer.output import output_path_for_result, safe_filename
+from xpp_analyzer.project_parser import extract_technical_objects
 
 
 def parse_args():
@@ -90,6 +91,7 @@ __all__ = [
     "extract_class_info",
     "extract_methods",
     "extract_properties",
+    "extract_technical_objects",
     "find_calls",
     "find_fields",
     "find_operations",
