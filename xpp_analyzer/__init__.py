@@ -52,6 +52,7 @@ from xpp_analyzer.analyzer import (
     unique_preserve_order,
 )
 from xpp_analyzer.output import output_path_for_result, safe_filename
+from xpp_analyzer.project_parser import analyze_project_description
 
 
 def parse_args():
@@ -86,6 +87,7 @@ __all__ = [
     "MethodVariable",
     "Operation",
     "analyze_source",
+    "analyze_project_description",
     "build_call_tree",
     "extract_class_info",
     "extract_methods",
