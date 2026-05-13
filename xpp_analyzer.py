@@ -121,6 +121,7 @@ SELECT_OPTION_KEYWORDS = {
     "validtimestate",
 }
 FIELD_METHOD_NAMES = {"clear", "delete", "doupdate", "insert", "reread", "update", "validatewrite"}
+SUPPORTED_EXTENSIONS = [".txt", ".xpo"]
 
 
 @dataclass
@@ -736,10 +737,68 @@ def output_path_for_result(result: dict[str, Any], explicit_output: Path | None 
     return Path("xpp-analysis.json")
 
 
+def analyze_file(input_path: Path, output_path: Path | None, include_source: bool) -> dict[str, Any]:
+    source = input_path.read_text(encoding="utf-8", errors="ignore")
+    source = normalize_xpo_source(source)
+    result = analyze_source(source, include_source=include_source)
+    output_path = output_path_for_result(result, output_path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
+    return result
+
+
+def display_path(path: Path, input_dir: Path) -> str:
+    try:
+        return str(path.relative_to(input_dir))
+    except ValueError:
+        return path.name
+
+
+def analyze_directory(input_dir: Path, output_dir: Path | None, include_source: bool) -> dict[str, int]:
+    total_files = 0
+    processed = 0
+    errors = 0
+
+    for file_path in sorted(input_dir.rglob("*")):
+        if not file_path.is_file() or file_path.suffix.lower() not in SUPPORTED_EXTENSIONS:
+            continue
+
+        total_files += 1
+        relative_name = display_path(file_path, input_dir)
+        json_path = (
+            file_path.with_suffix(".json")
+            if output_dir is None
+            else output_dir / file_path.relative_to(input_dir).with_suffix(".json")
+        )
+
+        try:
+            json_path.parent.mkdir(parents=True, exist_ok=True)
+            analyze_file(file_path, json_path, include_source)
+        except Exception as e:
+            errors += 1
+            print(f"ERROR: {relative_name}: {e}")
+            continue
+
+        processed += 1
+        print(f"Processed: {relative_name}")
+
+    summary = {"total_files": total_files, "processed": processed, "errors": errors}
+    print(f"Total files: {total_files}")
+    print(f"Processed: {processed}")
+    print(f"Errors: {errors}")
+    return summary
+
+
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Analyze X++ class methods and save a JSON call/operation tree.")
-    parser.add_argument("input", type=Path, help="Path to an exported X++ class source file")
-    parser.add_argument("-o", "--output", type=Path, default=None, help="JSON output path")
+    parser = argparse.ArgumentParser(description="Analyze X++ class methods and save JSON call/operation trees.")
+    parser.add_argument("input", type=Path, help="Path to an exported X++ class source file or directory")
+    parser.add_argument(
+        "-o",
+        "--output",
+        type=Path,
+        default=None,
+        help="JSON output path for file input; output directory for directory input",
+    )
     parser.add_argument("--no-source", action="store_true", help="Do not include full method source in JSON")
     parser.add_argument("--ai-prompt", type=Path, help="Optional path for a ready-to-send AI prompt Markdown file")
     return parser.parse_args()
@@ -747,11 +806,17 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = parse_args()
-    source = args.input.read_text(encoding="utf-8", errors="ignore")
-    source = normalize_xpo_source(source)
-    result = analyze_source(source, include_source=not args.no_source)
-    output_path = output_path_for_result(result, args.output)
-    output_path.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    if args.input.is_dir():
+        if args.ai_prompt:
+            print("WARNING: --ai-prompt is ignored in directory mode")
+        analyze_directory(args.input, args.output, include_source=not args.no_source)
+        return
+
+    if not args.input.is_file():
+        raise FileNotFoundError(f"Input path is not a file or directory: {args.input}")
+
+    result = analyze_file(args.input, args.output, include_source=not args.no_source)
 
     if args.ai_prompt:
         prompt = (
