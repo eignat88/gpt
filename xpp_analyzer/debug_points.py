@@ -111,6 +111,23 @@ OPERATION_KIND_PRIORITY = {
     "checkFailed": ("error_point", "high"),
 }
 
+DATA_CHANGE_OPERATIONS = {
+    "update",
+    "insert",
+    "delete",
+    "doUpdate",
+    "update_recordset",
+    "insert_recordset",
+    "delete_from",
+}
+
+BUFFER_METHOD_BY_OPERATION = {
+    "update": "update",
+    "insert": "insert",
+    "delete": "delete",
+    "doUpdate": "doUpdate",
+}
+
 CHECKS_BY_KIND = {
     "method_entry": [
         "Проверить входные параметры метода.",
@@ -189,7 +206,16 @@ def _what_to_check(kind: str) -> list[str]:
     return list(CHECKS_BY_KIND.get(kind, CHECKS_BY_KIND["decision_point"]))
 
 
-def _point(*, method: str, line: int, kind: str, priority: str, reason: str, snippet: str) -> DebugPoint:
+def _point(
+    *,
+    method: str,
+    line: int,
+    kind: str,
+    priority: str,
+    reason: str,
+    snippet: str,
+    affected_fields: list[str] | None = None,
+) -> DebugPoint:
     return DebugPoint(
         id="",
         method=method,
@@ -199,6 +225,7 @@ def _point(*, method: str, line: int, kind: str, priority: str, reason: str, sni
         reason=reason,
         snippet=snippet,
         what_to_check=_what_to_check("method_entry" if kind == "entry_point" else kind),
+        affected_fields=list(affected_fields or []),
     )
 
 
@@ -232,6 +259,65 @@ def _has_for_update(snippet: str) -> bool:
     return bool(re.search(r"\bforupdate\b", snippet, re.IGNORECASE))
 
 
+def _unique_preserve_order(items: list[str]) -> list[str]:
+    seen: set[str] = set()
+    result: list[str] = []
+    for item in items:
+        key = item.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        result.append(item)
+    return result
+
+
+def _changed_buffer_name(operation: Operation) -> str | None:
+    snippet = operation.snippet
+    buffer_method = BUFFER_METHOD_BY_OPERATION.get(operation.type)
+    if buffer_method:
+        match = re.search(
+            rf"\b(?P<buffer>[A-Za-z_]\w*)\s*\.\s*{re.escape(buffer_method)}\s*\(",
+            snippet,
+            re.IGNORECASE,
+        )
+        if match:
+            return match.group("buffer")
+
+    statement_patterns = {
+        "update_recordset": r"\bupdate_recordset\s+(?P<buffer>[A-Za-z_]\w*)\b",
+        "insert_recordset": r"\binsert_recordset\s+(?P<buffer>[A-Za-z_]\w*)\b",
+        "delete_from": r"\bdelete_from\s+(?P<buffer>[A-Za-z_]\w*)\b",
+        "delete": r"\bdelete\s+(?P<buffer>[A-Za-z_]\w*)\b",
+        "insert": r"\binsert\s+(?P<buffer>[A-Za-z_]\w*)\b",
+        "update": r"\bupdate\s+(?P<buffer>[A-Za-z_]\w*)\b",
+    }
+    pattern = statement_patterns.get(operation.type)
+    if pattern is None:
+        return None
+    match = re.search(pattern, snippet, re.IGNORECASE)
+    return match.group("buffer") if match else None
+
+
+def _affected_fields_for_operation(method: MethodSource, operation: Operation) -> list[str]:
+    if operation.type not in DATA_CHANGE_OPERATIONS:
+        return []
+
+    buffer_name = _changed_buffer_name(operation)
+    if not buffer_name:
+        return []
+
+    operation_line_index = operation.line - method.start_line
+    if operation_line_index <= 0:
+        return []
+
+    previous_source = "\n".join(method.clean_source.splitlines()[:operation_line_index])
+    assignment_pattern = re.compile(
+        rf"\b{re.escape(buffer_name)}\s*\.\s*(?P<field>[A-Za-z_]\w*)\s*=(?!=)",
+        re.IGNORECASE,
+    )
+    return _unique_preserve_order([match.group("field") for match in assignment_pattern.finditer(previous_source)])
+
+
 def _operation_point(method: MethodSource, operation: Operation) -> DebugPoint | None:
     mapping = OPERATION_KIND_PRIORITY.get(operation.type)
     if mapping is None:
@@ -256,6 +342,7 @@ def _operation_point(method: MethodSource, operation: Operation) -> DebugPoint |
         priority=priority,
         reason=_operation_reason(kind, operation),
         snippet=operation.snippet,
+        affected_fields=_affected_fields_for_operation(method, operation) if kind == "data_change" else None,
     )
 
 

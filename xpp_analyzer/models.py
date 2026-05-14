@@ -45,6 +45,7 @@ class DebugPoint:
     reason: str
     snippet: str
     what_to_check: list[str]
+    affected_fields: list[str] = field(default_factory=list)
 
 
 @dataclass

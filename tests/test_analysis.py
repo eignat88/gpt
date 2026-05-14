@@ -184,6 +184,30 @@ ENDSOURCE
         self.assertIn("debug_route", result)
 
 
+    def test_data_change_breakpoint_includes_affected_fields_for_buffer_update(self):
+        source = """
+SOURCE #processBeforeBatch
+public void processBeforeBatch()
+{
+    LFL_SCSPickingWaveTable pickingWaveTable;
+
+    pickingWaveTable.Status = LFL_SCSPickingWaveStatus::InWork;
+    pickingWaveTable.PickingSessionId = "SESSION-001";
+    pickingWaveTable.update();
+}
+ENDSOURCE
+"""
+
+        result = analyze_source(source)
+        update_point = next(
+            point
+            for point in result["recommended_breakpoints"]
+            if point["kind"] == "data_change" and "pickingWaveTable.update" in point["snippet"]
+        )
+
+        self.assertEqual(update_point["affected_fields"], ["Status", "PickingSessionId"])
+
+
     def test_debug_points_are_filtered_deduplicated_and_russian(self):
         source = """
 SOURCE #main
