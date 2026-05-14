@@ -332,6 +332,139 @@ ENDSOURCE
         self.assertTrue(any("runPickStep" in snippet for snippet in business_call_snippets))
         self.assertTrue(any("runFinishStep" in snippet for snippet in business_call_snippets))
 
+    def test_wave_methods_use_method_specific_debug_hints(self):
+        source = """
+SOURCE #checkWaveStatus
+private void checkWaveStatus()
+{
+    checkFailed("Invalid wave status");
+}
+ENDSOURCE
+SOURCE #processBeforeBatch
+private void processBeforeBatch()
+{
+    LFL_SCSPickingWaveTable waveTable;
+    LFL_SCSActiveSession activeSession;
+
+    ttsBegin;
+    waveTable.Status = LFL_SCSPickingWaveStatus::Processing;
+    waveTable.update();
+    activeSession.update();
+    ttsCommit;
+}
+ENDSOURCE
+SOURCE #checkSalesIdRange
+protected boolean checkSalesIdRange()
+{
+    LFL_SCSPickingWaveLine waveLine;
+
+    while select waveLine
+        where waveLine.PickingWaveId == this.parmPickingWaveId()
+           && waveLine.SalesId == salesId
+    {
+    }
+
+    return waveLine.RecId != 0;
+}
+ENDSOURCE
+SOURCE #fillPickingWaveItems
+private void fillPickingWaveItems()
+{
+    LFL_SCSPickingWaveItem waveItem;
+
+    waveItem.insert();
+}
+ENDSOURCE
+SOURCE #updateSortingLocation
+private void updateSortingLocation()
+{
+    LFL_SCSPickingWaveLine waveLine;
+
+    waveLine.update();
+}
+ENDSOURCE
+SOURCE #runReservationStep
+private void runReservationStep()
+{
+    InventTrans inventTrans;
+
+    inventTrans.update();
+}
+ENDSOURCE
+SOURCE #runPickStep
+private void runPickStep()
+{
+    WHSWorkLine workLine;
+
+    workLine.update();
+}
+ENDSOURCE
+SOURCE #runFinishStep
+private void runFinishStep()
+{
+    LFL_SCSPickingWaveTable waveTable;
+
+    waveTable.update();
+    ttsCommit;
+}
+ENDSOURCE
+"""
+
+        result = analyze_source(source)
+        points_by_method_kind = {
+            (point["method"], point["kind"]): point
+            for point in result["recommended_breakpoints"]
+        }
+        expected_points = [
+            ("checkWaveStatus", "error_point"),
+            ("processBeforeBatch", "data_change"),
+            ("checkSalesIdRange", "data_read"),
+            ("fillPickingWaveItems", "data_change"),
+            ("updateSortingLocation", "data_change"),
+            ("runReservationStep", "data_change"),
+            ("runPickStep", "data_change"),
+            ("runFinishStep", "data_change"),
+        ]
+        generic_reasons = {
+            "Изменение сохранённых данных.",
+            "Чтение данных, которое может влиять на дальнейшее выполнение алгоритма.",
+            "Чтение данных в цикле, которое может влиять на дальнейшее выполнение алгоритма.",
+            "Проверка может прервать выполнение или изменить дальнейший сценарий.",
+        }
+        generic_checks = {
+            (
+                "Проверить значения полей перед изменением.",
+                "Проверить корректность выбранной записи.",
+                "Проверить, что изменение выполняется в нужной транзакции.",
+            ),
+            (
+                "Проверить фильтры, join-условия и ожидаемое количество записей.",
+                "Проверить необходимость forUpdate и блокировок.",
+                "Проверить, как прочитанные данные влияют на ветвления и изменения.",
+            ),
+            (
+                "Проверить условия возникновения ошибки.",
+                "Проверить значения переменных перед ошибкой.",
+                "Проверить, не нарушается ли целостность данных.",
+            ),
+        }
+
+        for method, kind in expected_points:
+            with self.subTest(method=method, kind=kind):
+                point = points_by_method_kind[(method, kind)]
+                self.assertNotIn(point["reason"], generic_reasons)
+                self.assertNotIn(tuple(point["what_to_check"]), generic_checks)
+
+        self.assertIn(
+            "принадлежности заказа",
+            points_by_method_kind[("checkSalesIdRange", "data_read")]["reason"],
+        )
+        self.assertIn(
+            "статус волны и данные активной сессии",
+            points_by_method_kind[("processBeforeBatch", "data_change")]["reason"],
+        )
+
+
     def test_debug_route_uses_top_level_business_methods_and_filters_technical_methods(self):
         source = """
 SOURCE #main
