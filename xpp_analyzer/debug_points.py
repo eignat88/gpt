@@ -8,7 +8,8 @@ import re
 
 from .models import DebugPoint, DebugRouteStep, MethodSource, Operation
 
-ENTRY_POINT_METHODS = {"main", "construct", "run"}
+ENTRY_POINT_METHODS = {"main", "construct", "initfromargs", "run"}
+RUNBASEBATCH_ENTRY_POINT_METHODS = {"main", "construct", "initfromargs", "run"}
 ROUTE_ENTRY_METHODS = {
     "main",
     "construct",
@@ -359,19 +360,33 @@ def _build_route(points: list[DebugPoint], options: DebugPointOptions) -> list[D
     return route
 
 
-def build_debug_point_analysis(methods: list[MethodSource], options: DebugPointOptions = DEFAULT_OPTIONS) -> DebugPointAnalysis:
+def _is_runbasebatch_class(class_info: dict | None) -> bool:
+    extends = class_info.get("extends") if class_info else None
+    return isinstance(extends, str) and extends.lower() == "runbasebatch"
+
+
+def build_debug_point_analysis(
+    methods: list[MethodSource],
+    options: DebugPointOptions = DEFAULT_OPTIONS,
+    class_info: dict | None = None,
+) -> DebugPointAnalysis:
     """Build recommended breakpoints, debug route and breakpoint statistics."""
     method_names = {method.name.lower() for method in methods}
+    entry_point_methods = set(ENTRY_POINT_METHODS)
+    if _is_runbasebatch_class(class_info):
+        entry_point_methods.update(RUNBASEBATCH_ENTRY_POINT_METHODS)
     candidates: list[DebugPoint] = []
 
     for method in methods:
-        if method.name.lower() in ENTRY_POINT_METHODS:
+        method_name_lower = method.name.lower()
+        if method_name_lower in entry_point_methods:
             line, snippet = _entry_location(method)
             reason = {
                 "main": "Основная точка запуска класса.",
                 "run": "Основной сценарий выполнения класса.",
                 "construct": "Создание экземпляра текущего класса.",
-            }.get(method.name.lower(), "Вход в метод класса.")
+                "initfromargs": "Инициализация класса из аргументов запуска.",
+            }.get(method_name_lower, "Вход в метод класса.")
             candidates.append(
                 _point(method=method.name, line=line, kind="method_entry", priority="high", reason=reason, snippet=snippet)
             )
@@ -405,6 +420,6 @@ def build_debug_point_analysis(methods: list[MethodSource], options: DebugPointO
     return DebugPointAnalysis(recommended_breakpoints=recommended, debug_route=route, summary=summary)
 
 
-def find_debug_points(methods: list[MethodSource]) -> list[DebugPoint]:
+def find_debug_points(methods: list[MethodSource], class_info: dict | None = None) -> list[DebugPoint]:
     """Build sorted recommended breakpoint points from analyzed methods."""
-    return build_debug_point_analysis(methods).recommended_breakpoints
+    return build_debug_point_analysis(methods, class_info=class_info).recommended_breakpoints

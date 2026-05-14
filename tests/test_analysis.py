@@ -276,6 +276,52 @@ ENDSOURCE
         self.assertIn("run", route_methods)
         self.assertTrue(any(step["method"] == "run" and step["kind"] == "business_call" for step in result["debug_route"]))
 
+    def test_runbasebatch_entry_methods_are_recommended(self):
+        source = """
+class DemoBatch extends runbasebatch
+{
+}
+SOURCE #main
+public static void main(Args _args)
+{
+    DemoBatch batch = DemoBatch::construct();
+    batch.initFromArgs(_args);
+    batch.run();
+}
+ENDSOURCE
+SOURCE #construct
+public static DemoBatch construct()
+{
+    return new DemoBatch();
+}
+ENDSOURCE
+SOURCE #initFromArgs
+public void initFromArgs(Args _args)
+{
+}
+ENDSOURCE
+SOURCE #run
+public void run()
+{
+}
+ENDSOURCE
+"""
+
+        result = analyze_source(source)
+        method_entry_points = [
+            point
+            for point in result["recommended_breakpoints"]
+            if point["kind"] == "method_entry"
+        ]
+
+        self.assertEqual(result["class_info"]["extends"], "runbasebatch")
+        self.assertGreaterEqual(len(method_entry_points), 4)
+        self.assertTrue(
+            {"main", "construct", "initFromArgs", "run"}.issubset(
+                {point["method"] for point in method_entry_points}
+            )
+        )
+
     def test_debug_points_respect_total_limit(self):
         sections = []
         for method_index in range(8):
