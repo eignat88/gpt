@@ -2,17 +2,76 @@
 
 from __future__ import annotations
 
+from collections import Counter, defaultdict
+from dataclasses import dataclass, field
 import re
 
-from .models import DebugPoint, MethodSource, Operation
+from .models import DebugPoint, DebugRouteStep, MethodSource, Operation
 
-ENTRY_POINT_METHODS = {"main", "construct", "new", "run", "process", "execute", "init", "update", "create", "post"}
+ENTRY_POINT_METHODS = {"main", "construct", "run"}
+ROUTE_ENTRY_METHODS = {
+    "main",
+    "construct",
+    "new",
+    "init",
+    "initfromargs",
+    "checkwavestatus",
+    "processbeforebatch",
+    "run",
+}
+BUSINESS_METHOD_MARKERS = (
+    "run",
+    "process",
+    "update",
+    "fill",
+    "create",
+    "check",
+    "validate",
+    "init",
+    "reserve",
+    "pick",
+    "sort",
+    "finish",
+    "post",
+)
+LOW_PRIORITY_METHODS = {"caption", "pack", "unpack"}
 PRIORITY_ORDER = {"critical": 0, "high": 1, "medium": 2, "low": 3}
+ALLOWED_RECOMMENDED_KINDS = {
+    "method_entry",
+    "transaction_start",
+    "transaction_commit",
+    "data_read",
+    "data_change",
+    "error_point",
+    "business_call",
+    "decision_point",
+}
+
+
+@dataclass(frozen=True)
+class DebugPointOptions:
+    include_low_priority: bool = False
+    include_external_calls: bool = False
+    max_breakpoints_per_method: int = 10
+    max_total_recommended_breakpoints: int = 50
+    max_debug_route_steps: int = 100
+    language: str = "ru"
+
+
+@dataclass
+class DebugPointAnalysis:
+    recommended_breakpoints: list[DebugPoint]
+    debug_route: list[DebugRouteStep]
+    summary: dict[str, object] = field(default_factory=dict)
+
+
+DEFAULT_OPTIONS = DebugPointOptions()
+
 OPERATION_KIND_PRIORITY = {
     "ttsBegin": ("transaction_start", "critical"),
     "ttsCommit": ("transaction_commit", "critical"),
     "select": ("data_read", "medium"),
-    "while_select": ("data_read", "medium"),
+    "while_select": ("data_read", "high"),
     "update": ("data_change", "critical"),
     "insert": ("data_change", "critical"),
     "delete": ("data_change", "critical"),
@@ -20,41 +79,122 @@ OPERATION_KIND_PRIORITY = {
     "update_recordset": ("data_change", "critical"),
     "insert_recordset": ("data_change", "critical"),
     "delete_from": ("data_change", "critical"),
-    "throw": ("error_point", "high"),
-    "error": ("error_point", "high"),
-    "warning": ("error_point", "high"),
+    "throw": ("error_point", "critical"),
+    "error": ("error_point", "critical"),
+    "warning": ("error_point", "medium"),
     "checkFailed": ("error_point", "high"),
 }
 
+CHECKS_BY_KIND = {
+    "method_entry": [
+        "Проверить входные параметры метода.",
+        "Проверить начальное состояние объекта и ключевых переменных.",
+        "Проверить первый выбранный сценарий выполнения.",
+    ],
+    "transaction_start": [
+        "Проверить состояние ключевых переменных перед транзакцией.",
+        "Проверить, какие методы выполняются внутри транзакции.",
+        "Проверить, что все изменения закрываются корректным ttsCommit.",
+    ],
+    "transaction_commit": [
+        "Проверить, что данные были валидированы перед фиксацией.",
+        "Проверить отсутствие незавершённых побочных изменений.",
+        "Проверить, что исключения не оставят данные в частично изменённом состоянии.",
+    ],
+    "data_read": [
+        "Проверить фильтры, join-условия и ожидаемое количество записей.",
+        "Проверить необходимость forUpdate и блокировок.",
+        "Проверить, как прочитанные данные влияют на ветвления и изменения.",
+    ],
+    "data_change": [
+        "Проверить значения полей перед изменением.",
+        "Проверить корректность выбранной записи.",
+        "Проверить, что изменение выполняется в нужной транзакции.",
+    ],
+    "error_point": [
+        "Проверить условия возникновения ошибки.",
+        "Проверить значения переменных перед ошибкой.",
+        "Проверить, не нарушается ли целостность данных.",
+    ],
+    "business_call": [
+        "Проверить входные данные перед вызовом метода.",
+        "Проверить, какие таблицы и поля изменяет вызываемый метод.",
+        "При необходимости перейти внутрь метода пошагово.",
+    ],
+    "internal_call": [
+        "Проверить, влияет ли вызов на текущий сценарий.",
+        "При необходимости перейти внутрь метода пошагово.",
+    ],
+    "external_call": [
+        "Проверить параметры внешнего вызова.",
+        "Проверить ожидаемые побочные эффекты внешнего класса.",
+    ],
+    "decision_point": [
+        "Проверить условие ветвления.",
+        "Проверить значения переменных, влияющих на выбор ветки.",
+    ],
+}
 
-def _entry_snippet(method: MethodSource) -> str:
-    for line in method.source.splitlines():
+
+def _is_comment_or_blank(line: str) -> bool:
+    stripped = line.strip()
+    return not stripped or stripped.startswith("//") or stripped.startswith("/*") or stripped.startswith("*")
+
+
+def _entry_location(method: MethodSource) -> tuple[int, str]:
+    for offset, line in enumerate(method.source.splitlines(), start=0):
         stripped = line.strip()
-        if stripped and not stripped.lower().startswith("source #"):
-            return stripped
-    return method.name
+        lower = stripped.lower()
+        if _is_comment_or_blank(line) or lower.startswith("source #") or lower == "{":
+            continue
+        if method.signature and re.search(rf"\b{re.escape(method.signature.name)}\s*\(", stripped, re.IGNORECASE):
+            return method.start_line + offset, stripped
+    for offset, line in enumerate(method.source.splitlines(), start=0):
+        stripped = line.strip()
+        if _is_comment_or_blank(line) or stripped == "{" or stripped == "}":
+            continue
+        if stripped.lower().startswith("source #"):
+            continue
+        return method.start_line + offset, stripped
+    return method.start_line, method.name
 
 
-def _point(
-    *,
-    method: str,
-    line: int,
-    kind: str,
-    priority: str,
-    reason: str,
-    snippet: str,
-    what_to_check: str,
-) -> DebugPoint:
+def _what_to_check(kind: str) -> list[str]:
+    return list(CHECKS_BY_KIND.get(kind, CHECKS_BY_KIND["decision_point"]))
+
+
+def _point(*, method: str, line: int, kind: str, priority: str, reason: str, snippet: str) -> DebugPoint:
     return DebugPoint(
         id="",
         method=method,
         line=line,
-        kind=kind,
+        kind="method_entry" if kind == "entry_point" else kind,
         priority=priority,
         reason=reason,
         snippet=snippet,
-        what_to_check=what_to_check,
+        what_to_check=_what_to_check("method_entry" if kind == "entry_point" else kind),
     )
+
+
+def _operation_reason(kind: str, operation: Operation) -> str:
+    if kind == "transaction_start":
+        return "Начало транзакционного блока."
+    if kind == "transaction_commit":
+        return "Фиксация изменений транзакции."
+    if kind == "data_read":
+        if operation.type == "while_select":
+            return "Чтение данных в цикле, которое может влиять на дальнейшее выполнение алгоритма."
+        return "Чтение данных, которое может влиять на дальнейшее выполнение алгоритма."
+    if kind == "data_change":
+        return "Изменение сохранённых данных."
+    if kind == "error_point":
+        snippet = operation.snippet.lower()
+        if "throw" in snippet:
+            return "Исключение прерывает выполнение метода."
+        if "checkfailed" in snippet:
+            return "Проверка может прервать выполнение или изменить дальнейший сценарий."
+        return "Сообщение об ошибке или предупреждении может изменить сценарий выполнения."
+    return "Важная точка выполнения метода."
 
 
 def _operation_point(method: MethodSource, operation: Operation) -> DebugPoint | None:
@@ -63,81 +203,208 @@ def _operation_point(method: MethodSource, operation: Operation) -> DebugPoint |
         return None
 
     kind, priority = mapping
-    checks = {
-        "transaction_start": "Verify transaction scope, nested tts levels, and all exits before commit/abort.",
-        "transaction_commit": "Verify data was validated before commit and exceptions cannot leave partial state.",
-        "data_read": "Inspect selected filters, joins, forUpdate usage, locking, and expected cardinality.",
-        "data_change": "Validate changed table buffers, write conditions, side effects, and transaction coverage.",
-        "error_point": "Check whether the error path is expected, user-safe, and leaves data in a consistent state.",
-    }
-    reasons = {
-        "transaction_start": f"{operation.type} starts a transaction boundary.",
-        "transaction_commit": f"{operation.type} commits a transaction boundary.",
-        "data_read": f"{operation.type} reads data that may drive branching or updates.",
-        "data_change": f"{operation.type} changes persisted data.",
-        "error_point": f"{operation.type} can interrupt or alter the execution path.",
-    }
+    if kind == "error_point":
+        lower = operation.snippet.lower()
+        if "throw" in lower:
+            priority = "critical"
+        elif "checkfailed" in lower:
+            priority = "high"
     return _point(
         method=method.name,
         line=operation.line,
         kind=kind,
         priority=priority,
-        reason=reasons[kind],
+        reason=_operation_reason(kind, operation),
         snippet=operation.snippet,
-        what_to_check=checks[kind],
     )
 
 
-def _internal_call_points(method: MethodSource) -> list[DebugPoint]:
+def _is_business_method(name: str) -> bool:
+    lowered = name.lower()
+    return any(marker in lowered for marker in BUSINESS_METHOD_MARKERS)
+
+
+def _is_low_priority_method(name: str) -> bool:
+    lowered = name.lower()
+    return lowered.startswith("parm") or lowered in LOW_PRIORITY_METHODS
+
+
+def _line_for_offset(method: MethodSource, offset: int) -> tuple[int, str]:
+    line = method.start_line + method.clean_source.count("\n", 0, offset)
+    line_start = method.source.rfind("\n", 0, offset) + 1
+    line_end = method.source.find("\n", offset)
+    if line_end == -1:
+        line_end = len(method.source)
+    return line, method.source[line_start:line_end].strip()
+
+
+def _internal_call_points(method: MethodSource, method_names: set[str]) -> list[DebugPoint]:
     points: list[DebugPoint] = []
     for call in method.internal_calls:
-        pattern = re.compile(rf"\b{re.escape(call)}\s*\(", re.IGNORECASE)
-        for match in pattern.finditer(method.clean_source):
-            line = method.start_line + method.clean_source.count("\n", 0, match.start())
-            line_start = method.source.rfind("\n", 0, match.start()) + 1
-            line_end = method.source.find("\n", match.start())
-            if line_end == -1:
-                line_end = len(method.source)
-            points.append(
-                _point(
-                    method=method.name,
-                    line=line,
-                    kind="internal_call",
-                    priority="low",
-                    reason=f"Calls internal method {call}.",
-                    snippet=method.source[line_start:line_end].strip(),
-                    what_to_check="Step into the internal method if inputs or side effects influence this scenario.",
-                )
-            )
+        call_lower = call.lower()
+        patterns = [re.compile(rf"\bthis\s*\.\s*{re.escape(call)}\s*\(", re.IGNORECASE)]
+        if call_lower in method_names:
+            patterns.append(re.compile(rf"(?<!::)\b{re.escape(call)}\s*\(", re.IGNORECASE))
+        seen_offsets: set[int] = set()
+        for pattern in patterns:
+            for match in pattern.finditer(method.clean_source):
+                if match.start() in seen_offsets:
+                    continue
+                seen_offsets.add(match.start())
+                line, snippet = _line_for_offset(method, match.start())
+                if _is_business_method(call):
+                    kind = "business_call"
+                    priority = "high"
+                    reason = f"Вызов ключевого бизнес-метода {call}."
+                else:
+                    kind = "internal_call"
+                    priority = "low" if _is_low_priority_method(call) else "low"
+                    reason = f"Вызов внутреннего метода класса {call}."
+                points.append(_point(method=method.name, line=line, kind=kind, priority=priority, reason=reason, snippet=snippet))
     return points
 
 
-def find_debug_points(methods: list[MethodSource]) -> list[DebugPoint]:
-    """Build sorted recommended breakpoint points from analyzed methods."""
+def _external_call_points(method: MethodSource) -> list[DebugPoint]:
     points: list[DebugPoint] = []
+    pattern = re.compile(r"\b(?P<class>[A-Za-z_]\w*)\s*::\s*(?P<method>[A-Za-z_]\w*)\s*\(", re.IGNORECASE)
+    for match in pattern.finditer(method.clean_source):
+        line, snippet = _line_for_offset(method, match.start())
+        external_method = match.group("method")
+        priority = "medium" if _is_business_method(external_method) and external_method.lower() != "construct" else "low"
+        points.append(
+            _point(
+                method=method.name,
+                line=line,
+                kind="external_call",
+                priority=priority,
+                reason=f"Вызов внешнего метода {match.group('class')}::{external_method}.",
+                snippet=snippet,
+            )
+        )
+    return points
+
+
+def _deduplicate(points: list[DebugPoint]) -> tuple[list[DebugPoint], int]:
+    seen: set[tuple[str, int, str, str]] = set()
+    result: list[DebugPoint] = []
+    for point in sorted(points, key=lambda item: (item.line, PRIORITY_ORDER.get(item.priority, 99), item.kind)):
+        key = (point.method, point.line, point.kind, point.snippet.strip())
+        if key in seen:
+            continue
+        seen.add(key)
+        result.append(point)
+    return result, len(points) - len(result)
+
+
+def _should_recommend(point: DebugPoint, options: DebugPointOptions) -> bool:
+    if point.kind == "external_call" and not options.include_external_calls:
+        return False
+    if point.priority == "low" and not options.include_low_priority:
+        return False
+    return point.kind in ALLOWED_RECOMMENDED_KINDS or (point.kind == "external_call" and options.include_external_calls)
+
+
+def _limit_recommended(points: list[DebugPoint], options: DebugPointOptions) -> list[DebugPoint]:
+    by_method: dict[str, list[DebugPoint]] = defaultdict(list)
+    ordered = sorted(points, key=lambda point: (PRIORITY_ORDER.get(point.priority, 99), point.line, point.kind))
+    for point in ordered:
+        bucket = by_method[point.method]
+        if len(bucket) < options.max_breakpoints_per_method:
+            bucket.append(point)
+    limited = [point for bucket in by_method.values() for point in bucket]
+    limited.sort(key=lambda point: (PRIORITY_ORDER.get(point.priority, 99), point.line, point.kind))
+    limited = limited[: options.max_total_recommended_breakpoints]
+    limited.sort(key=lambda point: (point.line, PRIORITY_ORDER.get(point.priority, 99), point.kind))
+    return limited
+
+
+def _route_reason(point: DebugPoint) -> str:
+    if point.kind == "method_entry":
+        if point.method.lower() == "main":
+            return "Точка запуска класса."
+        if point.method.lower() == "run":
+            return "Основной сценарий выполнения."
+        if point.method.lower() == "construct":
+            return "Создание экземпляра класса."
+        return "Вход в метод класса."
+    if point.kind == "business_call":
+        return point.reason
+    if point.kind == "internal_call":
+        return point.reason
+    if point.kind == "transaction_start":
+        return "Начало транзакции."
+    if point.kind == "data_change":
+        return "Изменение данных."
+    if point.kind == "error_point":
+        return "Обработка ошибки или исключения."
+    return point.reason
+
+
+def _build_route(points: list[DebugPoint], options: DebugPointOptions) -> list[DebugRouteStep]:
+    route_points = [
+        point
+        for point in points
+        if point.kind in {"method_entry", "business_call", "internal_call"}
+        or (point.kind == "external_call" and options.include_external_calls)
+    ]
+    route_points.sort(key=lambda point: (0 if point.kind == "method_entry" and point.method.lower() in ROUTE_ENTRY_METHODS else 1, point.line))
+    route: list[DebugRouteStep] = []
+    seen: set[tuple[str, int, str]] = set()
+    for point in route_points[: options.max_debug_route_steps]:
+        key = (point.method, point.line, point.kind)
+        if key in seen:
+            continue
+        seen.add(key)
+        route.append(DebugRouteStep(step=len(route) + 1, method=point.method, line=point.line, kind=point.kind, reason=_route_reason(point)))
+    return route
+
+
+def build_debug_point_analysis(methods: list[MethodSource], options: DebugPointOptions = DEFAULT_OPTIONS) -> DebugPointAnalysis:
+    """Build recommended breakpoints, debug route and breakpoint statistics."""
+    method_names = {method.name.lower() for method in methods}
+    candidates: list[DebugPoint] = []
 
     for method in methods:
         if method.name.lower() in ENTRY_POINT_METHODS:
-            points.append(
-                _point(
-                    method=method.name,
-                    line=method.start_line,
-                    kind="entry_point",
-                    priority="high",
-                    reason=f"{method.name} is a common execution entry point.",
-                    snippet=_entry_snippet(method),
-                    what_to_check="Confirm incoming parameters, object state, and the first branch taken by execution.",
-                )
+            line, snippet = _entry_location(method)
+            reason = {
+                "main": "Основная точка запуска класса.",
+                "run": "Основной сценарий выполнения класса.",
+                "construct": "Создание экземпляра текущего класса.",
+            }.get(method.name.lower(), "Вход в метод класса.")
+            candidates.append(
+                _point(method=method.name, line=line, kind="method_entry", priority="high", reason=reason, snippet=snippet)
             )
 
         for operation in method.operations:
             point = _operation_point(method, operation)
             if point is not None:
-                points.append(point)
+                candidates.append(point)
 
-        points.extend(_internal_call_points(method))
+        candidates.extend(_internal_call_points(method, method_names))
+        candidates.extend(_external_call_points(method))
 
-    points.sort(key=lambda point: (point.line, PRIORITY_ORDER.get(point.priority, 99), point.kind))
-    for index, point in enumerate(points, start=1):
+    deduped, deduplicated_count = _deduplicate(candidates)
+    filtered_low_priority_count = sum(1 for point in deduped if point.priority == "low" and not options.include_low_priority)
+    recommended_candidates = [point for point in deduped if _should_recommend(point, options)]
+    recommended = _limit_recommended(recommended_candidates, options)
+    for index, point in enumerate(recommended, start=1):
         point.id = f"BP{index:03d}"
-    return points
+
+    route = _build_route(deduped, options)
+    priority_counts = Counter(point.priority for point in recommended)
+    kind_counts = Counter(point.kind for point in recommended)
+    summary = {
+        "total_recommended": len(recommended),
+        "total_route_steps": len(route),
+        "by_priority": dict(priority_counts),
+        "by_kind": dict(kind_counts),
+        "filtered_low_priority_count": filtered_low_priority_count,
+        "deduplicated_count": deduplicated_count,
+    }
+    return DebugPointAnalysis(recommended_breakpoints=recommended, debug_route=route, summary=summary)
+
+
+def find_debug_points(methods: list[MethodSource]) -> list[DebugPoint]:
+    """Build sorted recommended breakpoint points from analyzed methods."""
+    return build_debug_point_analysis(methods).recommended_breakpoints

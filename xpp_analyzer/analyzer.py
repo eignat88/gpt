@@ -11,8 +11,8 @@ import re
 from dataclasses import asdict, dataclass, field
 from typing import Any, Iterable
 
-from .debug_points import find_debug_points
-from .models import BusinessRequirement, CodeMatch, DebugPoint, DocumentAnalysisResult, ProjectInfo, TechnicalObjects
+from .debug_points import build_debug_point_analysis, find_debug_points
+from .models import BusinessRequirement, CodeMatch, DebugPoint, DebugRouteStep, DocumentAnalysisResult, ProjectInfo, TechnicalObjects
 
 METHOD_HEADER_RE = re.compile(
     r"(?m)^\s*(?!(?:if|while|for|switch|catch|using|else)\b)"
@@ -41,6 +41,7 @@ OPERATION_PATTERNS = {
     "delete": re.compile(r"\bdelete\b", re.IGNORECASE),
 }
 CALL_RE = re.compile(r"\b([A-Za-z_]\w*)\s*\(")
+STATIC_CALL_RE = re.compile(r"\b([A-Za-z_]\w*)\s*::\s*([A-Za-z_]\w*)\s*\(")
 FIELD_ACCESS_RE = re.compile(r"\b(?P<buffer>[A-Za-z_]\w*)\s*\.\s*(?P<field>[A-Za-z_]\w*)\b")
 IGNORED_CALL_NAMES = {
     "if",
@@ -659,8 +660,18 @@ def find_calls(method: MethodSource) -> list[str]:
     names = []
     for match in CALL_RE.finditer(method.clean_source):
         name = match.group(1)
+        prefix = method.clean_source[max(0, match.start() - 2) : match.start()]
+        if prefix == "::":
+            continue
         if name.lower() not in IGNORED_CALL_NAMES and name != method.name:
             names.append(name)
+    return unique_preserve_order(names)
+
+
+def find_external_calls(method: MethodSource) -> list[str]:
+    names = []
+    for match in STATIC_CALL_RE.finditer(method.clean_source):
+        names.append(f"{match.group(1)}::{match.group(2)}")
     return unique_preserve_order(names)
 
 
@@ -685,10 +696,11 @@ def analyze_xpp_source(source: str, include_source: bool = True) -> dict[str, An
         method.operations = find_operations(method)
         method.calls = find_calls(method)
         method.internal_calls = [method_names[call.lower()] for call in method.calls if call.lower() in method_names]
-        method.external_calls = [call for call in method.calls if call.lower() not in method_names]
+        method.external_calls = find_external_calls(method) + [call for call in method.calls if call.lower() not in method_names]
         method.fields = find_fields(method, table_variable_map(method))
 
-    debug_points = find_debug_points(methods)
+    debug_point_analysis = build_debug_point_analysis(methods)
+    debug_points = debug_point_analysis.recommended_breakpoints
 
     graph = {method.name: method.internal_calls for method in methods}
     called = {child for children in graph.values() for child in children}
@@ -706,6 +718,7 @@ def analyze_xpp_source(source: str, include_source: bool = True) -> dict[str, An
             "debug_points_count": len(debug_points),
             "critical_debug_points_count": sum(1 for point in debug_points if point.priority == "critical"),
             "high_debug_points_count": sum(1 for point in debug_points if point.priority == "high"),
+            "breakpoints_summary": debug_point_analysis.summary,
         },
         "methods": [
             {
@@ -727,9 +740,10 @@ def analyze_xpp_source(source: str, include_source: bool = True) -> dict[str, An
         "call_graph": graph,
         "call_tree": [build_call_tree(root, graph) for root in roots],
         "recommended_breakpoints": [asdict(point) for point in debug_points],
+        "debug_route": [asdict(step) for step in debug_point_analysis.debug_route],
         "debug_strategy": {
-            "summary": "Start with entry points, transaction boundaries, data changes, and error paths before stepping into lower-risk calls.",
-            "entry_points": [point.method for point in debug_points if point.kind == "entry_point"],
+            "summary": "Начинайте с точек входа, транзакций, изменений данных и ошибок; внутренние вызовы смотрите по debug_route.",
+            "entry_points": [point.method for point in debug_points if point.kind == "method_entry"],
             "recommended_order": [point.id for point in debug_points],
         },
         "ai_analysis_prompt": (

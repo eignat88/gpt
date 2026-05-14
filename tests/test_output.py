@@ -57,6 +57,7 @@ ENDSOURCE
                 "call_graph",
                 "call_tree",
                 "recommended_breakpoints",
+                "debug_route",
                 "debug_strategy",
                 "ai_analysis_prompt",
             },
@@ -65,7 +66,7 @@ ENDSOURCE
         self.assertEqual(result["methods"][0]["name"], "run")
         self.assertEqual(result["summary"]["debug_points_count"], 1)
         self.assertEqual(result["recommended_breakpoints"][0]["id"], "BP001")
-        self.assertEqual(result["recommended_breakpoints"][0]["kind"], "entry_point")
+        self.assertEqual(result["recommended_breakpoints"][0]["kind"], "method_entry")
         self.assertEqual(result["debug_strategy"]["recommended_order"], ["BP001"])
 
     def test_project_document_output_has_stable_json_schema(self):
