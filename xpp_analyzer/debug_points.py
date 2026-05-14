@@ -10,18 +10,42 @@ from .models import DebugPoint, DebugRouteStep, MethodSource, Operation
 
 ENTRY_POINT_METHODS = {"main", "construct", "initfromargs", "run"}
 RUNBASEBATCH_ENTRY_POINT_METHODS = {"main", "construct", "initfromargs", "run"}
-ROUTE_ENTRY_METHODS = {
+ROUTE_METHOD_PRIORITY = (
     "main",
     "construct",
-    "new",
-    "init",
     "initfromargs",
     "checkwavestatus",
-    "processbeforebatch",
     "run",
-}
+    "initsalesidset",
+    "validate",
+    "checksalesidrange",
+    "processbeforebatch",
+    "fillpickingwaveitems",
+    "updatesortinglocation",
+    "runreservationstep",
+    "runpickstep",
+    "runupdsortstatstep",
+    "runfinishstep",
+    "setresulttofile",
+)
+ROUTE_METHOD_PRIORITY_INDEX = {name: index for index, name in enumerate(ROUTE_METHOD_PRIORITY)}
+ROUTE_ENTRY_METHODS = set(ROUTE_METHOD_PRIORITY) | {"new", "init"}
 TECHNICAL_METHOD_NAMES = {"pack", "unpack", "caption", "construct", "initbatchinfo", "initformletter"}
+TECHNICAL_ROUTE_METHOD_NAMES = {
+    "pack",
+    "unpack",
+    "caption",
+    "batchinfo",
+    "super",
+    "value",
+    "enabled",
+    "control",
+    "dialog",
+    "dialogpostrun",
+    "getfromdialog",
+}
 TECHNICAL_METHOD_PREFIXES = ("parm",)
+TECHNICAL_ROUTE_METHOD_PREFIXES = ("parm", "dialog")
 BUSINESS_METHOD_PREFIXES = (
     "run",
     "process",
@@ -56,7 +80,7 @@ class DebugPointOptions:
     include_external_calls: bool = False
     max_breakpoints_per_method: int = 10
     max_total_recommended_breakpoints: int = 50
-    max_debug_route_steps: int = 100
+    max_debug_route_steps: int = 25
     language: str = "ru"
 
 
@@ -240,6 +264,18 @@ def _is_technical_method(name: str) -> bool:
     return lowered in TECHNICAL_METHOD_NAMES or any(lowered.startswith(prefix) for prefix in TECHNICAL_METHOD_PREFIXES)
 
 
+def _is_technical_route_method(name: str) -> bool:
+    lowered = name.lower()
+    return lowered in TECHNICAL_ROUTE_METHOD_NAMES or any(
+        lowered.startswith(prefix) for prefix in TECHNICAL_ROUTE_METHOD_PREFIXES
+    )
+
+
+def _is_route_method(name: str) -> bool:
+    lowered = name.lower()
+    return lowered in ROUTE_ENTRY_METHODS or _is_business_method(lowered)
+
+
 def _is_business_method(name: str) -> bool:
     lowered = name.lower()
     if _is_technical_method(lowered):
@@ -418,23 +454,54 @@ def _route_reason(point: DebugPoint) -> str:
     return point.reason
 
 
-def _build_route(points: list[DebugPoint], options: DebugPointOptions) -> list[DebugRouteStep]:
-    route_points = [
-        point
-        for point in points
-        if point.kind in {"method_entry", "business_call", "internal_call"}
-        or (point.kind == "external_call" and options.include_external_calls)
-    ]
-    route_points.sort(key=lambda point: (0 if point.kind == "method_entry" and point.method.lower() in ROUTE_ENTRY_METHODS else 1, point.line))
-    route: list[DebugRouteStep] = []
-    seen: set[tuple[str, int, str]] = set()
-    for point in route_points[: options.max_debug_route_steps]:
-        key = (point.method, point.line, point.kind)
-        if key in seen:
+def _route_sort_key(method: MethodSource) -> tuple[int, int, int]:
+    method_priority = ROUTE_METHOD_PRIORITY_INDEX.get(method.name.lower())
+    if method_priority is not None:
+        return 0, method_priority, method.start_line
+    return 1, method.start_line, 0
+
+
+def _build_route(methods: list[MethodSource], options: DebugPointOptions) -> tuple[list[DebugRouteStep], int]:
+    route_methods: list[MethodSource] = []
+    filtered_technical_count = 0
+
+    for method in methods:
+        if _is_technical_route_method(method.name):
+            filtered_technical_count += 1
             continue
-        seen.add(key)
-        route.append(DebugRouteStep(step=len(route) + 1, method=point.method, line=point.line, kind=point.kind, reason=_route_reason(point)))
-    return route
+        if _is_route_method(method.name):
+            route_methods.append(method)
+
+    route_methods.sort(key=_route_sort_key)
+
+    route: list[DebugRouteStep] = []
+    seen: set[str] = set()
+    for method in route_methods:
+        if len(route) >= options.max_debug_route_steps:
+            break
+        method_key = method.name.lower()
+        if method_key in seen:
+            continue
+        seen.add(method_key)
+        line, snippet = _entry_location(method)
+        point = _point(
+            method=method.name,
+            line=line,
+            kind="method_entry",
+            priority="high",
+            reason="Верхнеуровневая точка маршрута отладки.",
+            snippet=snippet,
+        )
+        route.append(
+            DebugRouteStep(
+                step=len(route) + 1,
+                method=method.name,
+                line=line,
+                kind="method_entry",
+                reason=_route_reason(point),
+            )
+        )
+    return route, filtered_technical_count
 
 
 def _is_runbasebatch_class(class_info: dict | None) -> bool:
@@ -483,7 +550,7 @@ def build_debug_point_analysis(
     for index, point in enumerate(recommended, start=1):
         point.id = f"BP{index:03d}"
 
-    route = _build_route(deduped, options)
+    route, route_filtered_technical_count = _build_route(methods, options)
     priority_counts = Counter(point.priority for point in recommended)
     kind_counts = Counter(point.kind for point in recommended)
     summary = {
@@ -492,6 +559,7 @@ def build_debug_point_analysis(
         "by_priority": dict(priority_counts),
         "by_kind": dict(kind_counts),
         "filtered_low_priority_count": filtered_low_priority_count,
+        "route_filtered_technical_count": route_filtered_technical_count,
         "deduplicated_count": deduplicated_count,
     }
     return DebugPointAnalysis(recommended_breakpoints=recommended, debug_route=route, summary=summary)
