@@ -638,6 +638,19 @@ def build_debug_point_analysis(
         point.id = f"BP{index:03d}"
 
     route, route_filtered_technical_count = _build_route(methods, options)
+    recommended_identities = {_point_identity(point) for point in recommended}
+    method_entry_expected = (
+        sum(1 for method_name in RUNBASEBATCH_ENTRY_POINT_METHODS if method_name in method_names)
+        if _is_runbasebatch_class(class_info)
+        else 0
+    )
+    method_entry_found = sum(1 for point in recommended if point.kind == "method_entry")
+    data_read_found = sum(1 for point in recommended if point.kind == "data_read")
+    business_call_filtered_count = sum(
+        1
+        for point in recommended_candidates
+        if point.kind == "business_call" and _point_identity(point) not in recommended_identities
+    )
     priority_counts = Counter(point.priority for point in recommended)
     kind_counts = Counter(point.kind for point in recommended)
     summary = {
@@ -646,6 +659,10 @@ def build_debug_point_analysis(
         "by_priority": dict(priority_counts),
         "by_kind": dict(kind_counts),
         "filtered_low_priority_count": filtered_low_priority_count,
+        "method_entry_expected": method_entry_expected,
+        "method_entry_found": method_entry_found,
+        "data_read_found": data_read_found,
+        "business_call_filtered_count": business_call_filtered_count,
         "route_filtered_technical_count": route_filtered_technical_count,
         "deduplicated_count": deduplicated_count,
     }

@@ -1,3 +1,4 @@
+from collections import Counter
 import unittest
 
 from xpp_analyzer import analyze_source
@@ -727,6 +728,53 @@ ENDSOURCE
             )
         )
 
+        summary = result["summary"]["breakpoints_summary"]
+        self.assertEqual(summary["method_entry_expected"], 4)
+        self.assertEqual(summary["method_entry_found"], len(method_entry_points))
+        self.assertEqual(
+            summary["data_read_found"],
+            sum(1 for point in result["recommended_breakpoints"] if point["kind"] == "data_read"),
+        )
+
+    def test_breakpoint_summary_counts_match_recommended_breakpoints(self):
+        called_methods = "\n".join(f"    this.processStep{index}();" for index in range(12))
+        source = f"""
+SOURCE #run
+public void run()
+{{
+{called_methods}
+}}
+ENDSOURCE
+"""
+        source += "\n".join(
+            f"""
+SOURCE #processStep{index}
+private void processStep{index}()
+{{
+    select firstOnly RecId from custTable;
+}}
+ENDSOURCE
+"""
+            for index in range(12)
+        )
+
+        result = analyze_source(source)
+        breakpoints = result["recommended_breakpoints"]
+        summary = result["summary"]["breakpoints_summary"]
+
+        for key in (
+            "method_entry_expected",
+            "method_entry_found",
+            "data_read_found",
+            "business_call_filtered_count",
+            "route_filtered_technical_count",
+        ):
+            self.assertIn(key, summary)
+        self.assertEqual(summary["by_kind"], dict(Counter(point["kind"] for point in breakpoints)))
+        self.assertEqual(summary["by_priority"], dict(Counter(point["priority"] for point in breakpoints)))
+        self.assertEqual(summary["method_entry_found"], sum(1 for point in breakpoints if point["kind"] == "method_entry"))
+        self.assertEqual(summary["data_read_found"], sum(1 for point in breakpoints if point["kind"] == "data_read"))
+        self.assertGreater(summary["business_call_filtered_count"], 0)
 
     def test_recommends_check_method_select_as_data_read_when_total_limit_is_reached(self):
         sections = []
