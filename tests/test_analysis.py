@@ -276,6 +276,196 @@ ENDSOURCE
         self.assertIn("run", route_methods)
         self.assertTrue(any(step["method"] == "run" and step["kind"] == "business_call" for step in result["debug_route"]))
 
+
+    def test_business_method_allowlist_recommends_wave_steps(self):
+        source = """
+SOURCE #run
+public void run()
+{
+    this.fillPickingWaveItems();
+    this.updateSortingLocation();
+    this.runReservationStep();
+    this.runPickStep();
+    this.runFinishStep();
+}
+ENDSOURCE
+SOURCE #fillPickingWaveItems
+private void fillPickingWaveItems()
+{
+}
+ENDSOURCE
+SOURCE #updateSortingLocation
+private void updateSortingLocation()
+{
+}
+ENDSOURCE
+SOURCE #runReservationStep
+private void runReservationStep()
+{
+}
+ENDSOURCE
+SOURCE #runPickStep
+private void runPickStep()
+{
+}
+ENDSOURCE
+SOURCE #runFinishStep
+private void runFinishStep()
+{
+}
+ENDSOURCE
+"""
+
+        result = analyze_source(source)
+        business_call_snippets = [
+            point["snippet"]
+            for point in result["recommended_breakpoints"]
+            if point["kind"] == "business_call"
+        ]
+
+        self.assertTrue(any("fillPickingWaveItems" in snippet for snippet in business_call_snippets))
+        self.assertTrue(any("updateSortingLocation" in snippet for snippet in business_call_snippets))
+        self.assertTrue(any("runReservationStep" in snippet for snippet in business_call_snippets))
+        self.assertTrue(any("runPickStep" in snippet for snippet in business_call_snippets))
+        self.assertTrue(any("runFinishStep" in snippet for snippet in business_call_snippets))
+
+    def test_technical_methods_are_not_recommended_breakpoints(self):
+        source = """
+SOURCE #run
+public void run()
+{
+    this.parmPickingWaveId();
+    this.pack();
+    this.unpack(conNull());
+    this.caption();
+    this.initBatchInfo();
+    this.initFormLetter();
+}
+ENDSOURCE
+SOURCE #parmPickingWaveId
+public str parmPickingWaveId()
+{
+    return pickingWaveId;
+}
+ENDSOURCE
+SOURCE #pack
+public container pack()
+{
+    return conNull();
+}
+ENDSOURCE
+SOURCE #unpack
+public boolean unpack(container _packedClass)
+{
+    return true;
+}
+ENDSOURCE
+SOURCE #caption
+public str caption()
+{
+    return "Demo";
+}
+ENDSOURCE
+SOURCE #initBatchInfo
+private void initBatchInfo()
+{
+}
+ENDSOURCE
+SOURCE #initFormLetter
+private void initFormLetter()
+{
+}
+ENDSOURCE
+"""
+
+        result = analyze_source(source)
+        recommended_snippets = [point["snippet"] for point in result["recommended_breakpoints"]]
+
+        self.assertFalse(any("parmPickingWaveId" in snippet for snippet in recommended_snippets))
+        self.assertFalse(any("pack" in snippet for snippet in recommended_snippets))
+        self.assertFalse(any("unpack" in snippet for snippet in recommended_snippets))
+        self.assertFalse(any("caption" in snippet for snippet in recommended_snippets))
+        self.assertFalse(any("initBatchInfo" in snippet for snippet in recommended_snippets))
+        self.assertFalse(any("initFormLetter" in snippet for snippet in recommended_snippets))
+
+    def test_init_methods_need_explicit_business_allowlist(self):
+        source = """
+SOURCE #run
+public void run()
+{
+    this.initSalesIdSet();
+    this.initTemporaryState();
+}
+ENDSOURCE
+SOURCE #initSalesIdSet
+private void initSalesIdSet()
+{
+}
+ENDSOURCE
+SOURCE #initTemporaryState
+private void initTemporaryState()
+{
+}
+ENDSOURCE
+"""
+
+        result = analyze_source(source)
+        business_call_snippets = [
+            point["snippet"]
+            for point in result["recommended_breakpoints"]
+            if point["kind"] == "business_call"
+        ]
+        recommended_snippets = [point["snippet"] for point in result["recommended_breakpoints"]]
+
+        self.assertTrue(any("initSalesIdSet" in snippet for snippet in business_call_snippets))
+        self.assertFalse(any("initTemporaryState" in snippet for snippet in recommended_snippets))
+
+    def test_create_next_child_tasks_requires_batch_context_and_medium_priority(self):
+        source_without_context = """
+SOURCE #run
+public void run()
+{
+    this.createNextChildTasks();
+}
+ENDSOURCE
+SOURCE #createNextChildTasks
+private void createNextChildTasks()
+{
+}
+ENDSOURCE
+"""
+        source_with_context = """
+class DemoBatch extends runbasebatch
+{
+}
+SOURCE #run
+public void run()
+{
+    this.createNextChildTasks();
+}
+ENDSOURCE
+SOURCE #createNextChildTasks
+private void createNextChildTasks()
+{
+}
+ENDSOURCE
+"""
+
+        result_without_context = analyze_source(source_without_context)
+        self.assertFalse(
+            any("createNextChildTasks" in point["snippet"] for point in result_without_context["recommended_breakpoints"])
+        )
+
+        result_with_context = analyze_source(source_with_context)
+        create_next_points = [
+            point
+            for point in result_with_context["recommended_breakpoints"]
+            if "createNextChildTasks" in point["snippet"]
+        ]
+        self.assertEqual(len(create_next_points), 1)
+        self.assertEqual(create_next_points[0]["kind"], "business_call")
+        self.assertEqual(create_next_points[0]["priority"], "medium")
+
     def test_runbasebatch_entry_methods_are_recommended(self):
         source = """
 class DemoBatch extends runbasebatch
