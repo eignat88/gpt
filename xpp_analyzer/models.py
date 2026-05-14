@@ -36,6 +36,18 @@ class MethodSignature:
 
 
 @dataclass
+class DebugPoint:
+    id: str
+    method: str
+    line: int
+    kind: str
+    priority: str
+    reason: str
+    snippet: str
+    what_to_check: str
+
+
+@dataclass
 class MethodSource:
     name: str
     start: int
@@ -61,6 +73,7 @@ class AnalysisResult:
     call_graph: dict[str, list[str]]
     call_tree: list[dict[str, Any]]
     summary: dict[str, Any]
+    debug_points: list[DebugPoint] = field(default_factory=list)
 
 
 @dataclass

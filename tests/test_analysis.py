@@ -145,5 +145,43 @@ ENDSOURCE
         self.assertNotIn("insert", method["fields"])
 
 
+class DebugPointsTest(unittest.TestCase):
+    def test_recommends_breakpoints_for_operations_and_calls(self):
+        source = """
+SOURCE #run
+public void run()
+{
+    CustTable custTable;
+
+    ttsBegin;
+    select firstOnly custTable;
+    helper();
+    custTable.update();
+    warning("Check customer");
+    ttsCommit;
+}
+ENDSOURCE
+SOURCE #helper
+private void helper()
+{
+    throw error("Failed");
+}
+ENDSOURCE
+"""
+
+        result = analyze_source(source)
+        kinds = [point["kind"] for point in result["recommended_breakpoints"]]
+
+        self.assertEqual(result["summary"]["debug_points_count"], len(result["recommended_breakpoints"]))
+        self.assertEqual(result["recommended_breakpoints"][0]["id"], "BP001")
+        self.assertIn("entry_point", kinds)
+        self.assertIn("transaction_start", kinds)
+        self.assertIn("transaction_commit", kinds)
+        self.assertIn("data_read", kinds)
+        self.assertIn("data_change", kinds)
+        self.assertIn("internal_call", kinds)
+        self.assertIn("error_point", kinds)
+
+
 if __name__ == "__main__":
     unittest.main()

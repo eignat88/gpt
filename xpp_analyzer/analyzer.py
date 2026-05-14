@@ -11,7 +11,8 @@ import re
 from dataclasses import asdict, dataclass, field
 from typing import Any, Iterable
 
-from .models import BusinessRequirement, CodeMatch, DocumentAnalysisResult, ProjectInfo, TechnicalObjects
+from .debug_points import find_debug_points
+from .models import BusinessRequirement, CodeMatch, DebugPoint, DocumentAnalysisResult, ProjectInfo, TechnicalObjects
 
 METHOD_HEADER_RE = re.compile(
     r"(?m)^\s*(?!(?:if|while|for|switch|catch|using|else)\b)"
@@ -25,6 +26,16 @@ OPERATION_PATTERNS = {
     "while_select": re.compile(r"\bwhile\s+select\b", re.IGNORECASE),
     "select": re.compile(r"\bselect\b", re.IGNORECASE),
     "ttsBegin": re.compile(r"\bttsBegin\b", re.IGNORECASE),
+    "ttsCommit": re.compile(r"\bttsCommit\b", re.IGNORECASE),
+    "ttsAbort": re.compile(r"\bttsAbort\b", re.IGNORECASE),
+    "throw": re.compile(r"\bthrow\b", re.IGNORECASE),
+    "error": re.compile(r"\berror\s*\(", re.IGNORECASE),
+    "warning": re.compile(r"\bwarning\s*\(", re.IGNORECASE),
+    "checkFailed": re.compile(r"\bcheckFailed\s*\(", re.IGNORECASE),
+    "doUpdate": re.compile(r"\bdoUpdate\s*\(", re.IGNORECASE),
+    "update_recordset": re.compile(r"\bupdate_recordset\b", re.IGNORECASE),
+    "insert_recordset": re.compile(r"\binsert_recordset\b", re.IGNORECASE),
+    "delete_from": re.compile(r"\bdelete_from\b", re.IGNORECASE),
     "update": re.compile(r"\bupdate\b", re.IGNORECASE),
     "insert": re.compile(r"\binsert\b", re.IGNORECASE),
     "delete": re.compile(r"\bdelete\b", re.IGNORECASE),
@@ -677,6 +688,8 @@ def analyze_xpp_source(source: str, include_source: bool = True) -> dict[str, An
         method.external_calls = [call for call in method.calls if call.lower() not in method_names]
         method.fields = find_fields(method, table_variable_map(method))
 
+    debug_points = find_debug_points(methods)
+
     graph = {method.name: method.internal_calls for method in methods}
     called = {child for children in graph.values() for child in children}
     roots = [method.name for method in methods if method.name not in called] or [method.name for method in methods]
@@ -690,6 +703,9 @@ def analyze_xpp_source(source: str, include_source: bool = True) -> dict[str, An
                 operation_type: sum(1 for method in methods for op in method.operations if op.type == operation_type)
                 for operation_type in OPERATION_PATTERNS
             },
+            "debug_points_count": len(debug_points),
+            "critical_debug_points_count": sum(1 for point in debug_points if point.priority == "critical"),
+            "high_debug_points_count": sum(1 for point in debug_points if point.priority == "high"),
         },
         "methods": [
             {
@@ -710,6 +726,12 @@ def analyze_xpp_source(source: str, include_source: bool = True) -> dict[str, An
         ],
         "call_graph": graph,
         "call_tree": [build_call_tree(root, graph) for root in roots],
+        "recommended_breakpoints": [asdict(point) for point in debug_points],
+        "debug_strategy": {
+            "summary": "Start with entry points, transaction boundaries, data changes, and error paths before stepping into lower-risk calls.",
+            "entry_points": [point.method for point in debug_points if point.kind == "entry_point"],
+            "recommended_order": [point.id for point in debug_points],
+        },
         "ai_analysis_prompt": (
             "Analyze this X++ class JSON. Focus on DB reads/writes, ttsBegin transaction boundaries, "
             "nested while select patterns, update/insert/delete risks, and risky method-call chains."
