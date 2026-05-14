@@ -198,12 +198,26 @@ def _operation_reason(kind: str, operation: Operation) -> str:
     return "Важная точка выполнения метода."
 
 
+def _is_check_or_validate_method(name: str) -> bool:
+    lowered = name.lower()
+    return lowered.startswith("check") or lowered.startswith("validate")
+
+
+def _has_for_update(snippet: str) -> bool:
+    return bool(re.search(r"\bforupdate\b", snippet, re.IGNORECASE))
+
+
 def _operation_point(method: MethodSource, operation: Operation) -> DebugPoint | None:
     mapping = OPERATION_KIND_PRIORITY.get(operation.type)
     if mapping is None:
         return None
 
     kind, priority = mapping
+    if kind == "data_read" and _has_for_update(operation.snippet):
+        priority = "high"
+    elif kind == "data_read" and _is_check_or_validate_method(method.name):
+        priority = "medium"
+
     if kind == "error_point":
         lower = operation.snippet.lower()
         if "throw" in lower:
@@ -305,6 +319,28 @@ def _should_recommend(point: DebugPoint, options: DebugPointOptions) -> bool:
     return point.kind in ALLOWED_RECOMMENDED_KINDS or (point.kind == "external_call" and options.include_external_calls)
 
 
+def _is_while_select_point(point: DebugPoint) -> bool:
+    return bool(re.search(r"\bwhile\s+select\b", point.snippet, re.IGNORECASE))
+
+
+def _important_data_read_points(points: list[DebugPoint]) -> list[DebugPoint]:
+    important = [
+        point
+        for point in points
+        if point.kind == "data_read"
+        and (
+            _is_while_select_point(point)
+            or _has_for_update(point.snippet)
+            or _is_check_or_validate_method(point.method)
+        )
+    ]
+    return sorted(important, key=lambda point: (PRIORITY_ORDER.get(point.priority, 99), point.line, point.method))
+
+
+def _point_identity(point: DebugPoint) -> tuple[str, int, str, str]:
+    return point.method, point.line, point.kind, point.snippet.strip()
+
+
 def _limit_recommended(points: list[DebugPoint], options: DebugPointOptions) -> list[DebugPoint]:
     by_method: dict[str, list[DebugPoint]] = defaultdict(list)
     ordered = sorted(points, key=lambda point: (PRIORITY_ORDER.get(point.priority, 99), point.line, point.kind))
@@ -312,11 +348,34 @@ def _limit_recommended(points: list[DebugPoint], options: DebugPointOptions) -> 
         bucket = by_method[point.method]
         if len(bucket) < options.max_breakpoints_per_method:
             bucket.append(point)
+
+    data_read_candidates = _important_data_read_points(points) or [point for point in ordered if point.kind == "data_read"]
+    reserved_data_read = data_read_candidates[0] if data_read_candidates else None
+
     limited = [point for bucket in by_method.values() for point in bucket]
+    if reserved_data_read is not None and _point_identity(reserved_data_read) not in {_point_identity(point) for point in limited}:
+        limited.append(reserved_data_read)
+
     limited.sort(key=lambda point: (PRIORITY_ORDER.get(point.priority, 99), point.line, point.kind))
     limited = limited[: options.max_total_recommended_breakpoints]
-    limited.sort(key=lambda point: (point.line, PRIORITY_ORDER.get(point.priority, 99), point.kind))
-    return limited
+
+    if reserved_data_read is not None and _point_identity(reserved_data_read) not in {_point_identity(point) for point in limited}:
+        if limited:
+            limited[-1] = reserved_data_read
+        else:
+            limited = [reserved_data_read]
+
+    seen: set[tuple[str, int, str, str]] = set()
+    deduped_limited: list[DebugPoint] = []
+    for point in limited:
+        key = _point_identity(point)
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped_limited.append(point)
+
+    deduped_limited.sort(key=lambda point: (point.line, PRIORITY_ORDER.get(point.priority, 99), point.kind))
+    return deduped_limited
 
 
 def _route_reason(point: DebugPoint) -> str:
