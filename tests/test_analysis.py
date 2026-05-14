@@ -322,6 +322,47 @@ ENDSOURCE
             )
         )
 
+
+    def test_recommends_check_method_select_as_data_read_when_total_limit_is_reached(self):
+        sections = []
+        for method_index in range(8):
+            body = "\n".join(f'    throw error("Failed {method_index}-{index}");' for index in range(10))
+            sections.append(
+                f"""
+SOURCE #process{method_index}
+public void process{method_index}()
+{{
+{body}
+}}
+ENDSOURCE
+"""
+            )
+        sections.append(
+            """
+SOURCE #checkSalesIdRange
+protected boolean checkSalesIdRange()
+{
+    LFL_SCSPickingWaveLine waveLine;
+
+    select firstOnly RecId from waveLine;
+
+    return waveLine.RecId != 0;
+}
+ENDSOURCE
+"""
+        )
+
+        result = analyze_source("\n".join(sections))
+
+        self.assertTrue(
+            any(
+                point["kind"] == "data_read"
+                and point["method"] == "checkSalesIdRange"
+                and "select firstOnly RecId from waveLine" in point["snippet"]
+                for point in result["recommended_breakpoints"]
+            )
+        )
+
     def test_debug_points_respect_total_limit(self):
         sections = []
         for method_index in range(8):
