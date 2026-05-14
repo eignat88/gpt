@@ -699,7 +699,7 @@ def analyze_xpp_source(source: str, include_source: bool = True) -> dict[str, An
         method.external_calls = find_external_calls(method) + [call for call in method.calls if call.lower() not in method_names]
         method.fields = find_fields(method, table_variable_map(method))
 
-    debug_point_analysis = build_debug_point_analysis(methods)
+    debug_point_analysis = build_debug_point_analysis(methods, class_info=class_info)
     debug_points = debug_point_analysis.recommended_breakpoints
 
     graph = {method.name: method.internal_calls for method in methods}

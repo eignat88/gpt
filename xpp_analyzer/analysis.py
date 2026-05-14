@@ -524,7 +524,7 @@ def analyze_model(source: str) -> AnalysisResult:
         method.external_calls = [call for call in method.calls if call.lower() not in method_names]
         method.fields = find_fields(method, table_variable_map(method))
 
-    debug_points = find_debug_points(methods)
+    debug_points = find_debug_points(methods, class_info=class_info)
 
     graph = {method.name: method.internal_calls for method in methods}
     called = {child for children in graph.values() for child in children}
