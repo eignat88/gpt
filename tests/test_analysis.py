@@ -209,6 +209,222 @@ ENDSOURCE
         self.assertEqual(update_point["affected_fields"], ["Status", "PickingSessionId"])
 
 
+    def test_check_sales_id_range_first_only_recid_select_is_data_read(self):
+        source = """
+SOURCE #checkSalesIdRange
+protected boolean checkSalesIdRange()
+{
+    LFL_SCSPickingWaveLine waveLine;
+
+    select firstOnly RecId from waveLine;
+
+    return waveLine.RecId != 0;
+}
+ENDSOURCE
+"""
+
+        result = analyze_source(source)
+        data_read_points = [
+            point
+            for point in result["recommended_breakpoints"]
+            if point["kind"] == "data_read" and point["method"] == "checkSalesIdRange"
+        ]
+
+        self.assertEqual(len(data_read_points), 1)
+        self.assertIn("select firstOnly RecId from waveLine", data_read_points[0]["snippet"])
+        self.assertEqual(result["summary"]["breakpoints_summary"]["data_read_found"], 1)
+
+
+    def test_business_call_filter_keeps_business_methods_and_drops_technical_methods(self):
+        source = """
+SOURCE #run
+public void run()
+{
+    this.checkSalesIdRange();
+    this.processBeforeBatch();
+    this.fillPickingWaveItems();
+    this.updateSortingLocation();
+    this.runReservationStep();
+    this.parmPickingWaveId();
+    this.pack();
+    this.unpack(conNull());
+    this.caption();
+    this.initBatchInfo();
+    this.initFormLetter();
+}
+ENDSOURCE
+SOURCE #checkSalesIdRange
+private boolean checkSalesIdRange()
+{
+    return true;
+}
+ENDSOURCE
+SOURCE #processBeforeBatch
+private void processBeforeBatch()
+{
+}
+ENDSOURCE
+SOURCE #fillPickingWaveItems
+private void fillPickingWaveItems()
+{
+}
+ENDSOURCE
+SOURCE #updateSortingLocation
+private void updateSortingLocation()
+{
+}
+ENDSOURCE
+SOURCE #runReservationStep
+private void runReservationStep()
+{
+}
+ENDSOURCE
+SOURCE #parmPickingWaveId
+public str parmPickingWaveId()
+{
+    return pickingWaveId;
+}
+ENDSOURCE
+SOURCE #pack
+public container pack()
+{
+    return conNull();
+}
+ENDSOURCE
+SOURCE #unpack
+public boolean unpack(container _packedClass)
+{
+    return true;
+}
+ENDSOURCE
+SOURCE #caption
+public str caption()
+{
+    return "Demo";
+}
+ENDSOURCE
+SOURCE #initBatchInfo
+private void initBatchInfo()
+{
+}
+ENDSOURCE
+SOURCE #initFormLetter
+private void initFormLetter()
+{
+}
+ENDSOURCE
+"""
+
+        result = analyze_source(source)
+        business_call_snippets = [
+            point["snippet"]
+            for point in result["recommended_breakpoints"]
+            if point["kind"] == "business_call"
+        ]
+
+        for business_method in (
+            "checkSalesIdRange",
+            "processBeforeBatch",
+            "fillPickingWaveItems",
+            "updateSortingLocation",
+            "runReservationStep",
+        ):
+            self.assertTrue(any(business_method in snippet for snippet in business_call_snippets))
+
+        for technical_method in (
+            "parmPickingWaveId",
+            "pack",
+            "unpack",
+            "caption",
+            "initBatchInfo",
+            "initFormLetter",
+        ):
+            self.assertFalse(any(technical_method in snippet for snippet in business_call_snippets))
+
+
+    def test_compact_debug_route_filters_technical_methods_and_keeps_top_level_scenario(self):
+        source = """
+SOURCE #main
+public static void main(Args _args)
+{
+    DemoBatch batch = DemoBatch::construct();
+    batch.run();
+}
+ENDSOURCE
+SOURCE #run
+public void run()
+{
+    this.processBeforeBatch();
+    this.fillPickingWaveItems();
+    this.parmPickingWaveId();
+    this.pack();
+    this.unpack(conNull());
+    this.caption();
+    this.initBatchInfo();
+    this.initFormLetter();
+}
+ENDSOURCE
+SOURCE #processBeforeBatch
+private void processBeforeBatch()
+{
+}
+ENDSOURCE
+SOURCE #fillPickingWaveItems
+private void fillPickingWaveItems()
+{
+}
+ENDSOURCE
+SOURCE #parmPickingWaveId
+public str parmPickingWaveId()
+{
+    return pickingWaveId;
+}
+ENDSOURCE
+SOURCE #pack
+public container pack()
+{
+    return conNull();
+}
+ENDSOURCE
+SOURCE #unpack
+public boolean unpack(container _packedClass)
+{
+    return true;
+}
+ENDSOURCE
+SOURCE #caption
+public str caption()
+{
+    return "Demo";
+}
+ENDSOURCE
+SOURCE #initBatchInfo
+private void initBatchInfo()
+{
+}
+ENDSOURCE
+SOURCE #initFormLetter
+private void initFormLetter()
+{
+}
+ENDSOURCE
+"""
+
+        result = analyze_source(source)
+        route_methods = [step["method"] for step in result["debug_route"]]
+
+        self.assertEqual(route_methods, ["main", "run", "processBeforeBatch", "fillPickingWaveItems"])
+        self.assertIn("processBeforeBatch", route_methods)
+        self.assertFalse(
+            any(
+                method.startswith("parm")
+                or method in {"pack", "unpack", "caption", "initBatchInfo", "initFormLetter"}
+                for method in route_methods
+            )
+        )
+        self.assertEqual(result["summary"]["breakpoints_summary"]["total_route_steps"], len(route_methods))
+
+
     def test_debug_points_are_filtered_deduplicated_and_russian(self):
         source = """
 SOURCE #main
@@ -735,6 +951,56 @@ ENDSOURCE
             summary["data_read_found"],
             sum(1 for point in result["recommended_breakpoints"] if point["kind"] == "data_read"),
         )
+
+    def test_runbasebatch_entry_chain_is_preserved_in_debug_route(self):
+        source = """
+class DemoBatch extends runbasebatch
+{
+}
+SOURCE #main
+public static void main(Args _args)
+{
+    DemoBatch batch = DemoBatch::construct();
+    batch.initFromArgs(_args);
+    batch.run();
+}
+ENDSOURCE
+SOURCE #construct
+public static DemoBatch construct()
+{
+    return new DemoBatch();
+}
+ENDSOURCE
+SOURCE #initFromArgs
+public void initFromArgs(Args _args)
+{
+    args = _args;
+}
+ENDSOURCE
+SOURCE #run
+public void run()
+{
+    this.processBeforeBatch();
+}
+ENDSOURCE
+SOURCE #processBeforeBatch
+private void processBeforeBatch()
+{
+}
+ENDSOURCE
+"""
+
+        result = analyze_source(source)
+        route_methods = [step["method"] for step in result["debug_route"]]
+        entry_point_methods = [
+            point["method"]
+            for point in result["recommended_breakpoints"]
+            if point["kind"] == "method_entry"
+        ]
+
+        self.assertEqual(route_methods[:4], ["main", "construct", "initFromArgs", "run"])
+        self.assertTrue({"main", "construct", "initFromArgs", "run"}.issubset(entry_point_methods))
+        self.assertEqual(result["summary"]["breakpoints_summary"]["method_entry_expected"], 4)
 
     def test_breakpoint_summary_counts_match_recommended_breakpoints(self):
         called_methods = "\n".join(f"    this.processStep{index}();" for index in range(12))
