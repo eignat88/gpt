@@ -274,7 +274,10 @@ ENDSOURCE
         route_methods = [step["method"] for step in result["debug_route"]]
         self.assertIn("main", route_methods)
         self.assertIn("run", route_methods)
-        self.assertTrue(any(step["method"] == "run" and step["kind"] == "business_call" for step in result["debug_route"]))
+        self.assertIn("checkWaveStatus", route_methods)
+        self.assertTrue(all(step["kind"] == "method_entry" for step in result["debug_route"]))
+        self.assertFalse({"parmCurrentBatch", "caption", "pack", "unpack"}.intersection(route_methods))
+        self.assertGreaterEqual(summary["route_filtered_technical_count"], 4)
 
 
     def test_business_method_allowlist_recommends_wave_steps(self):
@@ -328,6 +331,194 @@ ENDSOURCE
         self.assertTrue(any("runReservationStep" in snippet for snippet in business_call_snippets))
         self.assertTrue(any("runPickStep" in snippet for snippet in business_call_snippets))
         self.assertTrue(any("runFinishStep" in snippet for snippet in business_call_snippets))
+
+    def test_debug_route_uses_top_level_business_methods_and_filters_technical_methods(self):
+        source = """
+SOURCE #main
+public static void main(Args _args)
+{
+    DemoBatch batch = DemoBatch::construct();
+    batch.initFromArgs(_args);
+    batch.run();
+}
+ENDSOURCE
+SOURCE #construct
+public static DemoBatch construct()
+{
+    return new DemoBatch();
+}
+ENDSOURCE
+SOURCE #initFromArgs
+public void initFromArgs(Args _args)
+{
+}
+ENDSOURCE
+SOURCE #run
+public void run()
+{
+    this.initSalesIdSet();
+    this.validate();
+    this.checkSalesIdRange();
+    this.processBeforeBatch();
+    this.fillPickingWaveItems();
+    this.updateSortingLocation();
+    this.runReservationStep();
+    this.runPickStep();
+    this.runUpdSortStatStep();
+    this.runFinishStep();
+    this.setResultToFile();
+    this.parmPickingWaveId();
+    this.pack();
+    this.unpack(conNull());
+    this.caption();
+    super();
+    value();
+    enabled();
+    control();
+}
+ENDSOURCE
+SOURCE #initSalesIdSet
+private void initSalesIdSet()
+{
+}
+ENDSOURCE
+SOURCE #validate
+private boolean validate()
+{
+    return true;
+}
+ENDSOURCE
+SOURCE #checkSalesIdRange
+private boolean checkSalesIdRange()
+{
+    return true;
+}
+ENDSOURCE
+SOURCE #processBeforeBatch
+private void processBeforeBatch()
+{
+}
+ENDSOURCE
+SOURCE #fillPickingWaveItems
+private void fillPickingWaveItems()
+{
+}
+ENDSOURCE
+SOURCE #updateSortingLocation
+private void updateSortingLocation()
+{
+}
+ENDSOURCE
+SOURCE #runReservationStep
+private void runReservationStep()
+{
+}
+ENDSOURCE
+SOURCE #runPickStep
+private void runPickStep()
+{
+}
+ENDSOURCE
+SOURCE #runUpdSortStatStep
+private void runUpdSortStatStep()
+{
+}
+ENDSOURCE
+SOURCE #runFinishStep
+private void runFinishStep()
+{
+}
+ENDSOURCE
+SOURCE #setResultToFile
+private void setResultToFile()
+{
+}
+ENDSOURCE
+SOURCE #parmPickingWaveId
+public str parmPickingWaveId()
+{
+    return pickingWaveId;
+}
+ENDSOURCE
+SOURCE #pack
+public container pack()
+{
+    return conNull();
+}
+ENDSOURCE
+SOURCE #unpack
+public boolean unpack(container _packedClass)
+{
+    return true;
+}
+ENDSOURCE
+SOURCE #caption
+public str caption()
+{
+    return "Demo";
+}
+ENDSOURCE
+SOURCE #super
+public void super()
+{
+}
+ENDSOURCE
+SOURCE #value
+public anytype value()
+{
+}
+ENDSOURCE
+SOURCE #enabled
+public boolean enabled()
+{
+}
+ENDSOURCE
+SOURCE #control
+public FormControl control()
+{
+}
+ENDSOURCE
+SOURCE #dialogPostRun
+public void dialogPostRun(DialogRunbase _dialog)
+{
+}
+ENDSOURCE
+"""
+
+        result = analyze_source(source)
+        route_methods = [step["method"] for step in result["debug_route"]]
+
+        self.assertEqual(
+            route_methods,
+            [
+                "main",
+                "construct",
+                "initFromArgs",
+                "run",
+                "initSalesIdSet",
+                "validate",
+                "checkSalesIdRange",
+                "processBeforeBatch",
+                "fillPickingWaveItems",
+                "updateSortingLocation",
+                "runReservationStep",
+                "runPickStep",
+                "runUpdSortStatStep",
+                "runFinishStep",
+                "setResultToFile",
+            ],
+        )
+        self.assertFalse(
+            any(
+                method.startswith("parm")
+                or method in {"pack", "unpack", "caption", "super", "value", "enabled", "control", "dialogPostRun"}
+                for method in route_methods
+            )
+        )
+        self.assertGreaterEqual(
+            result["summary"]["breakpoints_summary"]["route_filtered_technical_count"],
+            9,
+        )
 
     def test_technical_methods_are_not_recommended_breakpoints(self):
         source = """
