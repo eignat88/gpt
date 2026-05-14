@@ -20,21 +20,22 @@ ROUTE_ENTRY_METHODS = {
     "processbeforebatch",
     "run",
 }
-BUSINESS_METHOD_MARKERS = (
+TECHNICAL_METHOD_NAMES = {"pack", "unpack", "caption", "construct", "initbatchinfo", "initformletter"}
+TECHNICAL_METHOD_PREFIXES = ("parm",)
+BUSINESS_METHOD_PREFIXES = (
     "run",
     "process",
     "update",
     "fill",
-    "create",
     "check",
     "validate",
-    "init",
-    "reserve",
-    "pick",
-    "sort",
     "finish",
-    "post",
+    "sort",
+    "pick",
+    "reserve",
 )
+BUSINESS_METHOD_NAMES = {"initsalesidset"}
+BATCH_MULTITHREAD_CONTEXT_RE = re.compile(r"\b(batch|multithread|multiThread|thread|task)\w*", re.IGNORECASE)
 LOW_PRIORITY_METHODS = {"caption", "pack", "unpack"}
 PRIORITY_ORDER = {"critical": 0, "high": 1, "medium": 2, "low": 3}
 ALLOWED_RECOMMENDED_KINDS = {
@@ -234,14 +235,25 @@ def _operation_point(method: MethodSource, operation: Operation) -> DebugPoint |
     )
 
 
+def _is_technical_method(name: str) -> bool:
+    lowered = name.lower()
+    return lowered in TECHNICAL_METHOD_NAMES or any(lowered.startswith(prefix) for prefix in TECHNICAL_METHOD_PREFIXES)
+
+
 def _is_business_method(name: str) -> bool:
     lowered = name.lower()
-    return any(marker in lowered for marker in BUSINESS_METHOD_MARKERS)
+    if _is_technical_method(lowered):
+        return False
+    return lowered in BUSINESS_METHOD_NAMES or any(lowered.startswith(prefix) for prefix in BUSINESS_METHOD_PREFIXES)
 
 
 def _is_low_priority_method(name: str) -> bool:
     lowered = name.lower()
-    return lowered.startswith("parm") or lowered in LOW_PRIORITY_METHODS
+    return _is_technical_method(lowered) or lowered in LOW_PRIORITY_METHODS
+
+
+def _has_batch_multithread_context(method: MethodSource, class_info: dict | None = None) -> bool:
+    return _is_runbasebatch_class(class_info) or bool(BATCH_MULTITHREAD_CONTEXT_RE.search(method.clean_source))
 
 
 def _line_for_offset(method: MethodSource, offset: int) -> tuple[int, str]:
@@ -253,7 +265,7 @@ def _line_for_offset(method: MethodSource, offset: int) -> tuple[int, str]:
     return line, method.source[line_start:line_end].strip()
 
 
-def _internal_call_points(method: MethodSource, method_names: set[str]) -> list[DebugPoint]:
+def _internal_call_points(method: MethodSource, method_names: set[str], class_info: dict | None = None) -> list[DebugPoint]:
     points: list[DebugPoint] = []
     for call in method.internal_calls:
         call_lower = call.lower()
@@ -267,7 +279,13 @@ def _internal_call_points(method: MethodSource, method_names: set[str]) -> list[
                     continue
                 seen_offsets.add(match.start())
                 line, snippet = _line_for_offset(method, match.start())
-                if _is_business_method(call):
+                if call_lower == "createnextchildtasks":
+                    if not _has_batch_multithread_context(method, class_info):
+                        continue
+                    kind = "business_call"
+                    priority = "medium"
+                    reason = f"Вызов batch/multithread-метода {call}."
+                elif _is_business_method(call):
                     kind = "business_call"
                     priority = "high"
                     reason = f"Вызов ключевого бизнес-метода {call}."
@@ -455,7 +473,7 @@ def build_debug_point_analysis(
             if point is not None:
                 candidates.append(point)
 
-        candidates.extend(_internal_call_points(method, method_names))
+        candidates.extend(_internal_call_points(method, method_names, class_info))
         candidates.extend(_external_call_points(method))
 
     deduped, deduplicated_count = _deduplicate(candidates)
