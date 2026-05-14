@@ -35,9 +35,10 @@ def analysis_to_dict(result: AnalysisResult, include_source: bool = True) -> dic
         "call_graph": result.call_graph,
         "call_tree": result.call_tree,
         "recommended_breakpoints": [asdict(point) for point in result.debug_points],
+        "debug_route": [],
         "debug_strategy": {
-            "summary": "Start with entry points, transaction boundaries, data changes, and error paths before stepping into lower-risk calls.",
-            "entry_points": [point.method for point in result.debug_points if point.kind == "entry_point"],
+            "summary": "Начинайте с точек входа, транзакций, изменений данных и ошибок; внутренние вызовы смотрите по debug_route.",
+            "entry_points": [point.method for point in result.debug_points if point.kind == "method_entry"],
             "recommended_order": [point.id for point in result.debug_points],
         },
         "ai_analysis_prompt": AI_ANALYSIS_PROMPT,

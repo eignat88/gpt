@@ -44,7 +44,16 @@ class DebugPoint:
     priority: str
     reason: str
     snippet: str
-    what_to_check: str
+    what_to_check: list[str]
+
+
+@dataclass
+class DebugRouteStep:
+    step: int
+    method: str
+    line: int
+    kind: str
+    reason: str
 
 
 @dataclass
