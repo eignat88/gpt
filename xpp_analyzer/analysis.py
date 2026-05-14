@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any, Iterable
 
 from .constants import *
+from .debug_points import find_debug_points
 from .models import AnalysisResult, MethodParameter, MethodSignature, MethodSource, MethodVariable, Operation
 
 
@@ -523,6 +524,8 @@ def analyze_model(source: str) -> AnalysisResult:
         method.external_calls = [call for call in method.calls if call.lower() not in method_names]
         method.fields = find_fields(method, table_variable_map(method))
 
+    debug_points = find_debug_points(methods)
+
     graph = {method.name: method.internal_calls for method in methods}
     called = {child for children in graph.values() for child in children}
     roots = [method.name for method in methods if method.name not in called] or [method.name for method in methods]
@@ -532,6 +535,9 @@ def analyze_model(source: str) -> AnalysisResult:
             operation_type: sum(1 for method in methods for op in method.operations if op.type == operation_type)
             for operation_type in OPERATION_PATTERNS
         },
+        "debug_points_count": len(debug_points),
+        "critical_debug_points_count": sum(1 for point in debug_points if point.priority == "critical"),
+        "high_debug_points_count": sum(1 for point in debug_points if point.priority == "high"),
     }
 
     return AnalysisResult(
@@ -540,6 +546,7 @@ def analyze_model(source: str) -> AnalysisResult:
         call_graph=graph,
         call_tree=[build_call_tree(root, graph) for root in roots],
         summary=summary,
+        debug_points=debug_points,
     )
 
 
